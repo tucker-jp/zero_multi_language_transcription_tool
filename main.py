@@ -36,7 +36,6 @@ class TranscriptionApp:
         self._db = Database(self._settings.db_path)
         self._db.connect()
         self._session_id: int | None = None
-        self._segments: list[dict] = []
         self._pending_db_segments: list[TranscriptionSegment] = []
         self._db_flush_timer: QTimer | None = None
         self._last_vocab_id: int | None = None
@@ -176,14 +175,6 @@ class TranscriptionApp:
 
         if segment.end_to_caption_ms is not None:
             self._record_latency(segment.end_to_caption_ms)
-        # Track for TXT export
-        self._segments.append(
-            {
-                "start_time": segment.start_time,
-                "end_time": segment.end_time,
-                "text": segment.text,
-            }
-        )
 
     def _record_latency(self, latency_ms: float):
         self._latency_samples_ms.append(latency_ms)
@@ -207,6 +198,12 @@ class TranscriptionApp:
             return
         self._db.add_segments(self._session_id, self._pending_db_segments)
         self._pending_db_segments.clear()
+
+    def _get_current_session_segments(self) -> list[dict]:
+        self._flush_segment_batch()
+        if self._session_id is None:
+            return []
+        return self._db.get_segments(self._session_id)
 
     def _on_pause_toggled(self, paused: bool):
         if paused:
@@ -240,7 +237,8 @@ class TranscriptionApp:
         self._manage_window.activateWindow()
 
     def _on_export(self):
-        if not self._segments:
+        segments = self._get_current_session_segments()
+        if not segments:
             return
         default_name = f"transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         path, _ = QFileDialog.getSaveFileName(
@@ -250,7 +248,7 @@ class TranscriptionApp:
             "Text Files (*.txt)",
         )
         if path:
-            export_txt(self._segments, path, include_timestamps=True)
+            export_txt(segments, path, include_timestamps=True)
             self._on_status(f"Exported TXT to {path}")
 
     def _on_translation_ready(
@@ -299,12 +297,13 @@ class TranscriptionApp:
         if self._session_id is not None:
             self._db.end_session(self._session_id)
             # Auto-save plain-text transcript
-            if self._segments:
+            segments = self._get_current_session_segments()
+            if segments:
                 data_dir = Path(self._settings.data_dir)
                 txt_dir = data_dir / "transcripts"
                 txt_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"session_{self._session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-                export_txt(self._segments, txt_dir / filename, include_timestamps=True)
+                export_txt(segments, txt_dir / filename, include_timestamps=True)
                 print(f"[STATUS] Auto-saved transcript to {txt_dir / filename}")
         self._db.close()
         QApplication.quit()
