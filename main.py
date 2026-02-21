@@ -2,7 +2,7 @@
 
 Captures system audio via BlackHole, transcribes French speech with mlx-whisper,
 displays live clickable captions in a floating overlay, and provides
-click-to-translate via OPUS-MT with vocabulary saving and SRT export.
+click-to-translate via OPUS-MT with vocabulary saving and TXT export.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileDialog
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
 
 from config.settings import Settings
@@ -37,7 +37,10 @@ class TranscriptionApp:
         self._db.connect()
         self._session_id: int | None = None
         self._segments: list[dict] = []
+        self._pending_db_segments: list[TranscriptionSegment] = []
+        self._db_flush_timer: QTimer | None = None
         self._last_vocab_id: int | None = None
+        self._latency_samples_ms: list[float] = []
 
         # Workers
         self._audio_worker: AudioWorker | None = None
@@ -58,6 +61,7 @@ class TranscriptionApp:
         self._create_overlay()
         self._create_workers()
         self._connect_signals()
+        self._start_db_flush_timer()
         self._start_workers()
         self._create_tray()
         self._overlay.show()
@@ -119,6 +123,12 @@ class TranscriptionApp:
         self._translation_worker.start()
         self._audio_worker.start()
 
+    def _start_db_flush_timer(self):
+        self._db_flush_timer = QTimer()
+        self._db_flush_timer.setInterval(500)
+        self._db_flush_timer.timeout.connect(self._flush_segment_batch)
+        self._db_flush_timer.start()
+
     def _create_tray(self):
         # Create a simple colored circle as tray icon
         pixmap = QPixmap(32, 32)
@@ -159,10 +169,14 @@ class TranscriptionApp:
 
     def _on_transcription(self, segment: TranscriptionSegment):
         self._overlay.set_caption(segment.text)
-        # Save to DB
         if self._session_id is not None:
-            self._db.add_segment(self._session_id, segment)
-        # Track for SRT export
+            self._pending_db_segments.append(segment)
+            if len(self._pending_db_segments) >= 10:
+                self._flush_segment_batch()
+
+        if segment.end_to_caption_ms is not None:
+            self._record_latency(segment.end_to_caption_ms)
+        # Track for TXT export
         self._segments.append(
             {
                 "start_time": segment.start_time,
@@ -170,6 +184,29 @@ class TranscriptionApp:
                 "text": segment.text,
             }
         )
+
+    def _record_latency(self, latency_ms: float):
+        self._latency_samples_ms.append(latency_ms)
+        if len(self._latency_samples_ms) > 100:
+            self._latency_samples_ms = self._latency_samples_ms[-100:]
+
+        log_every = max(1, int(self._settings.latency_log_every_n_segments))
+        if len(self._latency_samples_ms) % log_every != 0:
+            return
+
+        recent = self._latency_samples_ms[-log_every:]
+        avg_ms = sum(recent) / len(recent)
+        p95_ms = sorted(recent)[int(0.95 * (len(recent) - 1))]
+        target = int(self._settings.live_latency_target_ms)
+        self._on_status(
+            f"Latency avg={avg_ms:.0f}ms p95={p95_ms:.0f}ms target<={target}ms ({len(self._latency_samples_ms)} seg)"
+        )
+
+    def _flush_segment_batch(self):
+        if self._session_id is None or not self._pending_db_segments:
+            return
+        self._db.add_segments(self._session_id, self._pending_db_segments)
+        self._pending_db_segments.clear()
 
     def _on_pause_toggled(self, paused: bool):
         if paused:
@@ -254,6 +291,10 @@ class TranscriptionApp:
         print(f"[STATUS] {msg}")
 
     def _on_quit(self):
+        self._flush_segment_batch()
+        if self._db_flush_timer is not None:
+            self._db_flush_timer.stop()
+
         self._stop_workers()
         if self._session_id is not None:
             self._db.end_session(self._session_id)

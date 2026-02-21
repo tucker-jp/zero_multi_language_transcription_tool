@@ -77,6 +77,9 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 
 | Setting | Default | Description |
 |---|---|---|
+| `performance_profile` | `"live"` | Runtime tuning profile (`live`, `balanced`, `accurate`) |
+| `live_latency_target_ms` | `900` | Target end-to-caption latency in milliseconds |
+| `latency_log_every_n_segments` | `10` | Print rolling latency stats every N segments |
 | `audio_device` | `null` | Audio input device name or index. `null` = auto-detect BlackHole |
 | `sample_rate` | `16000` | Audio sample rate in Hz |
 | `channels` | `1` | Number of audio channels |
@@ -89,6 +92,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `language` | `"fr"` | Source language code |
 | `max_segment_seconds` | `15.0` | Maximum transcription segment length |
 | `segment_overlap_seconds` | `1.0` | Overlap between consecutive segments |
+| `word_timestamps` | `false` | Enable per-word timestamps (slower when `true`) |
 | `translation_model` | `"Helsinki-NLP/opus-mt-fr-en"` | HuggingFace translation model |
 | `translation_cache_size` | `1000` | Number of cached translations (LRU) |
 | `transcription_queue_maxsize` | `8` | Max pending audio segments before dropping oldest |

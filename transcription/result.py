@@ -1,5 +1,7 @@
 """Data classes for transcription results."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 
@@ -18,3 +20,6 @@ class TranscriptionSegment:
     end_time: float
     words: list[WordInfo]
     language: str = "fr"
+    queue_wait_ms: float | None = None
+    inference_ms: float | None = None
+    end_to_caption_ms: float | None = None

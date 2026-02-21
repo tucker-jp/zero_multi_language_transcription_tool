@@ -84,17 +84,26 @@ class Database:
         self._conn.commit()
 
     def add_segment(self, session_id: int, segment: TranscriptionSegment):
+        self.add_segments(session_id, [segment])
+
+    def add_segments(self, session_id: int, segments: list[TranscriptionSegment]):
         self._check_connected()
-        self._conn.execute(
-            "INSERT INTO segments (session_id, start_time, end_time, text, language) "
-            "VALUES (?, ?, ?, ?, ?)",
+        if not segments:
+            return
+        rows = [
             (
                 session_id,
-                segment.start_time,
-                segment.end_time,
-                segment.text,
-                segment.language,
-            ),
+                seg.start_time,
+                seg.end_time,
+                seg.text,
+                seg.language,
+            )
+            for seg in segments
+        ]
+        self._conn.executemany(
+            "INSERT INTO segments (session_id, start_time, end_time, text, language) "
+            "VALUES (?, ?, ?, ?, ?)",
+            rows,
         )
         self._conn.commit()
 

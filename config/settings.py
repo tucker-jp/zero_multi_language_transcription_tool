@@ -12,6 +12,11 @@ DEFAULT_CONFIG_PATH = DEFAULT_DATA_DIR / "settings.json"
 
 @dataclass
 class Settings:
+    # Runtime profile
+    performance_profile: str = "live"  # live, balanced, accurate
+    live_latency_target_ms: int = 900
+    latency_log_every_n_segments: int = 10
+
     # Audio
     audio_device: str | int | None = None  # name or index; None = BlackHole auto-detect
     sample_rate: int = 16000
@@ -29,6 +34,7 @@ class Settings:
     language: str = "fr"
     max_segment_seconds: float = 15.0
     segment_overlap_seconds: float = 1.0
+    word_timestamps: bool = False
 
     # Translation
     translation_model: str = "Helsinki-NLP/opus-mt-fr-en"
@@ -67,5 +73,18 @@ class Settings:
             # Only use keys that exist in the dataclass
             valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
             filtered = {k: v for k, v in data.items() if k in valid_keys}
-            return cls(**filtered)
+            settings = cls(**filtered)
+            if settings.performance_profile not in {"live", "balanced", "accurate"}:
+                settings.performance_profile = "live"
+            settings.transcription_queue_maxsize = max(
+                1, int(settings.transcription_queue_maxsize)
+            )
+            settings.translation_queue_maxsize = max(
+                1, int(settings.translation_queue_maxsize)
+            )
+            settings.live_latency_target_ms = max(300, int(settings.live_latency_target_ms))
+            settings.latency_log_every_n_segments = max(
+                1, int(settings.latency_log_every_n_segments)
+            )
+            return settings
         return cls()

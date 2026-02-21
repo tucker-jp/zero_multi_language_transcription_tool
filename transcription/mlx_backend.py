@@ -10,12 +10,18 @@ from transcription.result import TranscriptionSegment, WordInfo
 
 
 class MLXWhisperEngine(TranscriptionEngine):
-    def __init__(self, model: str = "small", language: str = "fr"):
+    def __init__(
+        self,
+        model: str = "small",
+        language: str = "fr",
+        word_timestamps: bool = False,
+    ):
         # mlx-whisper uses HuggingFace model paths
         if "/" not in model:
             model = f"mlx-community/whisper-{model}-mlx"
         self._model_path = model
         self._language = language
+        self._word_timestamps = bool(word_timestamps)
         self._loaded = False
 
     def load_model(self):
@@ -25,7 +31,7 @@ class MLXWhisperEngine(TranscriptionEngine):
             dummy,
             path_or_hf_repo=self._model_path,
             language=self._language,
-            word_timestamps=True,
+            word_timestamps=self._word_timestamps,
         )
         self._loaded = True
 
@@ -46,7 +52,7 @@ class MLXWhisperEngine(TranscriptionEngine):
             audio,
             path_or_hf_repo=self._model_path,
             language=self._language,
-            word_timestamps=True,
+            word_timestamps=self._word_timestamps,
         )
 
         if not result or not result.get("segments"):
@@ -58,16 +64,17 @@ class MLXWhisperEngine(TranscriptionEngine):
             return None
 
         words = []
-        for seg in result["segments"]:
-            for w in seg.get("words", []):
-                words.append(
-                    WordInfo(
-                        word=w["word"].strip(),
-                        start=w["start"],
-                        end=w["end"],
-                        probability=w.get("probability", 1.0),
+        if self._word_timestamps:
+            for seg in result["segments"]:
+                for w in seg.get("words", []):
+                    words.append(
+                        WordInfo(
+                            word=w["word"].strip(),
+                            start=w["start"],
+                            end=w["end"],
+                            probability=w.get("probability", 1.0),
+                        )
                     )
-                )
 
         first_seg = result["segments"][0]
         last_seg = result["segments"][-1]

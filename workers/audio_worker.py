@@ -16,7 +16,9 @@ from config.settings import Settings
 class AudioWorker(QThread):
     """Captures audio from BlackHole, runs VAD, emits speech segments."""
 
-    speech_segment = pyqtSignal(np.ndarray, float)  # (audio, session_offset)
+    speech_segment = pyqtSignal(
+        np.ndarray, float, float, float, float
+    )  # (audio, start_offset, end_offset, audio_to_emit_ms, emitted_mono)
     error = pyqtSignal(str)
     status = pyqtSignal(str)  # status messages
 
@@ -29,6 +31,25 @@ class AudioWorker(QThread):
     def run(self):
         self._running = True
         settings = self._settings
+        profile = str(settings.performance_profile or "live").strip().lower()
+
+        # Profile tuning keeps live captions responsive while preserving quality defaults.
+        silence_ms = settings.vad_silence_ms
+        max_speech_seconds = settings.max_speech_seconds
+        if profile == "live":
+            silence_ms = min(silence_ms, 220)
+            max_speech_seconds = min(
+                max_speech_seconds, max(0.8, settings.live_latency_target_ms / 1000.0)
+            )
+        elif profile == "accurate":
+            silence_ms = max(silence_ms, 450)
+            max_speech_seconds = max(max_speech_seconds, 2.5)
+
+        max_speech_seconds = min(max_speech_seconds, settings.max_segment_seconds)
+        self.status.emit(
+            "Audio profile="
+            f"{profile} (max_speech={max_speech_seconds:.2f}s, silence={silence_ms}ms)"
+        )
 
         # Find audio device
         device = None
@@ -52,7 +73,7 @@ class AudioWorker(QThread):
             vad = SileroVAD(
                 threshold=settings.vad_threshold,
                 sample_rate=settings.sample_rate,
-                silence_ms=settings.vad_silence_ms,
+                silence_ms=silence_ms,
                 min_speech_ms=settings.vad_min_speech_ms,
             )
         except Exception as e:
@@ -67,7 +88,24 @@ class AudioWorker(QThread):
 
         session_start = time.monotonic()
         speech_start_time: float | None = None
-        max_speech_samples = int(settings.max_speech_seconds * settings.sample_rate)
+        max_speech_samples = int(max_speech_seconds * settings.sample_rate)
+
+        def emit_segment(total_samples: int):
+            nonlocal speech_start_time
+            segment_audio = buf.read_last(total_samples)
+            offset = speech_start_time if speech_start_time is not None else 0.0
+            segment_duration = len(segment_audio) / settings.sample_rate
+            segment_end_offset = offset + segment_duration
+            now_offset = time.monotonic() - session_start
+            audio_to_emit_ms = max(0.0, (now_offset - segment_end_offset) * 1000.0)
+            emitted_mono = time.monotonic()
+            self.speech_segment.emit(
+                segment_audio,
+                offset,
+                segment_end_offset,
+                audio_to_emit_ms,
+                emitted_mono,
+            )
 
         def on_audio(audio: np.ndarray):
             nonlocal speech_start_time
@@ -88,9 +126,7 @@ class AudioWorker(QThread):
                     duration_samples + padding,
                     int(settings.max_segment_seconds * settings.sample_rate),
                 )
-                segment_audio = buf.read_last(total_samples)
-                offset = speech_start_time if speech_start_time is not None else 0.0
-                self.speech_segment.emit(segment_audio, offset)
+                emit_segment(total_samples)
                 speech_start_time = None
             elif (
                 result["is_speech"]
@@ -103,9 +139,7 @@ class AudioWorker(QThread):
                     duration_samples + padding,
                     int(settings.max_segment_seconds * settings.sample_rate),
                 )
-                segment_audio = buf.read_last(total_samples)
-                offset = speech_start_time if speech_start_time is not None else 0.0
-                self.speech_segment.emit(segment_audio, offset)
+                emit_segment(total_samples)
                 speech_start_time = time.monotonic() - session_start
 
         self.status.emit("Starting audio capture...")

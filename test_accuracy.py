@@ -316,7 +316,12 @@ def run_benchmark(audio_path: Path, sub_path: Path, model: str = "small"):
 
     # Create and load engine
     print(f"\nLoading MLXWhisperEngine (model={model})...")
-    engine = create_engine(backend="mlx", model=model, language="fr")
+    engine = create_engine(
+        backend="mlx",
+        model=model,
+        language="fr",
+        word_timestamps=True,
+    )
     engine.load_model()
     print("  Model loaded.")
 
