@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""Transcription accuracy benchmark.
+
+Downloads French audio + subtitles from YouTube, feeds the audio through
+MLXWhisperEngine, and compares against reference subtitles using Word Error Rate.
+
+Prerequisites (install once):
+    brew install yt-dlp ffmpeg
+
+Usage:
+    source .venv/bin/activate
+    python test_accuracy.py "https://www.youtube.com/watch?v=XXXXX"
+    python test_accuracy.py                     # uses a default French video
+    python test_accuracy.py --model large       # test with a different model size
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+import unicodedata
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+from scipy.io import wavfile
+
+from transcription.engine import create_engine
+
+TEST_DATA_DIR = Path("test_data")
+
+# Short France 24 news clip — clear speech with manual French subtitles (~1 min)
+DEFAULT_VIDEO = "https://www.youtube.com/watch?v=u_j2ZGpmCdA"
+
+
+# ---------------------------------------------------------------------------
+# Subtitle parsing
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SubSegment:
+    start: float
+    end: float
+    text: str
+
+
+def parse_timestamp(ts: str) -> float:
+    """Parse VTT/SRT timestamp to seconds. Handles HH:MM:SS.mmm and MM:SS.mmm."""
+    ts = ts.strip().replace(",", ".")
+    parts = ts.split(":")
+    if len(parts) == 3:
+        h, m, s = parts
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    elif len(parts) == 2:
+        m, s = parts
+        return int(m) * 60 + float(s)
+    return float(ts)
+
+
+def parse_subtitle_file(path: Path) -> list[SubSegment]:
+    """Parse a VTT or SRT file into timed segments."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    segments = []
+
+    # Detect format
+    is_vtt = text.strip().startswith("WEBVTT")
+
+    # Unified regex: matches "00:00:01.000 --> 00:00:04.000" style lines
+    time_re = re.compile(
+        r"(\d{1,2}:?\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,2}:?\d{2}:\d{2}[.,]\d{3})"
+    )
+
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        m = time_re.match(lines[i].strip())
+        if m:
+            start = parse_timestamp(m.group(1))
+            end = parse_timestamp(m.group(2))
+            i += 1
+            cue_lines = []
+            while i < len(lines) and lines[i].strip():
+                cue_lines.append(lines[i].strip())
+                i += 1
+            raw = " ".join(cue_lines)
+            # Strip VTT/SRT formatting tags
+            clean = re.sub(r"<[^>]+>", "", raw)
+            clean = re.sub(r"\{[^}]+\}", "", clean)  # SSA/ASS tags
+            clean = clean.strip()
+            if clean:
+                segments.append(SubSegment(start=start, end=end, text=clean))
+        else:
+            i += 1
+
+    # Deduplicate consecutive identical segments (common in auto-generated VTT)
+    deduped = []
+    for seg in segments:
+        if deduped and deduped[-1].text == seg.text:
+            deduped[-1].end = max(deduped[-1].end, seg.end)
+        else:
+            deduped.append(seg)
+
+    return deduped
+
+
+# ---------------------------------------------------------------------------
+# Download helpers
+# ---------------------------------------------------------------------------
+
+def check_prerequisites():
+    """Verify yt-dlp and ffmpeg are installed."""
+    # ffmpeg uses -version (single dash), yt-dlp uses --version
+    checks = [("yt-dlp", "--version"), ("ffmpeg", "-version")]
+    for cmd, flag in checks:
+        try:
+            subprocess.run(
+                [cmd, flag],
+                capture_output=True,
+                check=True,
+            )
+        except FileNotFoundError:
+            print(f"Error: '{cmd}' not found. Install with: brew install {cmd}")
+            sys.exit(1)
+
+
+def download_audio_and_subs(url: str) -> tuple[Path, Path]:
+    """Download audio as 16kHz mono WAV and French subtitles from a YouTube URL."""
+    TEST_DATA_DIR.mkdir(exist_ok=True)
+
+    audio_path = TEST_DATA_DIR / "audio.wav"
+    sub_path = None
+
+    # Download subtitles (prefer manual, fall back to auto-generated)
+    print("Downloading subtitles...")
+    sub_result = subprocess.run(
+        [
+            "yt-dlp",
+            "--write-sub",
+            "--write-auto-sub",
+            "--sub-lang", "fr,fr-FR,fr-orig",
+            "--sub-format", "vtt",
+            "--skip-download",
+            "--output", str(TEST_DATA_DIR / "subs"),
+            url,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    # Find the subtitle file that was downloaded
+    for ext in [".fr.vtt", ".fr.srt"]:
+        candidate = TEST_DATA_DIR / f"subs{ext}"
+        if candidate.exists():
+            sub_path = candidate
+            break
+
+    if sub_path is None:
+        # Check for any vtt/srt files in test_data
+        for f in TEST_DATA_DIR.glob("subs*"):
+            if f.suffix in (".vtt", ".srt"):
+                sub_path = f
+                break
+
+    if sub_path is None:
+        print("Error: Could not download French subtitles for this video.")
+        print("Try a different video that has French subtitles.")
+        print(f"yt-dlp output: {sub_result.stderr}")
+        sys.exit(1)
+
+    print(f"  Found subtitles: {sub_path.name}")
+
+    # Download audio and convert to 16kHz mono WAV
+    print("Downloading audio...")
+    subprocess.run(
+        [
+            "yt-dlp",
+            "--extract-audio",
+            "--audio-format", "wav",
+            "--postprocessor-args", "ffmpeg:-ar 16000 -ac 1",
+            "--output", str(TEST_DATA_DIR / "audio.%(ext)s"),
+            url,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    if not audio_path.exists():
+        print("Error: Audio download failed.")
+        sys.exit(1)
+
+    print(f"  Audio saved: {audio_path.name}")
+    return audio_path, sub_path
+
+
+# ---------------------------------------------------------------------------
+# Audio loading
+# ---------------------------------------------------------------------------
+
+def load_audio(path: Path) -> np.ndarray:
+    """Load WAV file as float32 numpy array at 16kHz."""
+    sr, data = wavfile.read(str(path))
+
+    # Convert to float32
+    if data.dtype == np.int16:
+        data = data.astype(np.float32) / 32768.0
+    elif data.dtype == np.int32:
+        data = data.astype(np.float32) / 2147483648.0
+    elif data.dtype != np.float32:
+        data = data.astype(np.float32)
+
+    # Convert stereo to mono
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+
+    # Resample if needed (simple linear interpolation)
+    if sr != 16000:
+        print(f"  Resampling from {sr}Hz to 16000Hz...")
+        duration = len(data) / sr
+        n_samples = int(duration * 16000)
+        indices = np.linspace(0, len(data) - 1, n_samples)
+        data = np.interp(indices, np.arange(len(data)), data).astype(np.float32)
+
+    return data
+
+
+# ---------------------------------------------------------------------------
+# WER computation
+# ---------------------------------------------------------------------------
+
+def normalize_text(text: str) -> list[str]:
+    """Normalize text for WER comparison: lowercase, strip punctuation, split words."""
+    text = text.lower()
+    # Normalize unicode (accented characters stay, but combining forms are unified)
+    text = unicodedata.normalize("NFC", text)
+    # Remove punctuation but keep accented letters and hyphens within words
+    text = re.sub(r"[^\w\s\-]", "", text)
+    # Collapse whitespace
+    words = text.split()
+    return [w for w in words if w]
+
+
+def word_error_rate(reference: list[str], hypothesis: list[str]) -> tuple[float, int, int, int]:
+    """Compute WER using Levenshtein edit distance on word sequences.
+
+    Returns (wer, substitutions, deletions, insertions).
+    """
+    r = reference
+    h = hypothesis
+    n = len(r)
+    m = len(h)
+
+    # DP table
+    d = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        d[i][0] = i
+    for j in range(m + 1):
+        d[0][j] = j
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if r[i - 1] == h[j - 1]:
+                d[i][j] = d[i - 1][j - 1]
+            else:
+                d[i][j] = 1 + min(
+                    d[i - 1][j],      # deletion
+                    d[i][j - 1],      # insertion
+                    d[i - 1][j - 1],  # substitution
+                )
+
+    # Backtrack to count S, D, I
+    subs = dels = ins = 0
+    i, j = n, m
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and r[i - 1] == h[j - 1]:
+            i -= 1
+            j -= 1
+        elif i > 0 and j > 0 and d[i][j] == d[i - 1][j - 1] + 1:
+            subs += 1
+            i -= 1
+            j -= 1
+        elif i > 0 and d[i][j] == d[i - 1][j] + 1:
+            dels += 1
+            i -= 1
+        else:
+            ins += 1
+            j -= 1
+
+    wer = d[n][m] / max(n, 1)
+    return wer, subs, dels, ins
+
+
+# ---------------------------------------------------------------------------
+# Main benchmark
+# ---------------------------------------------------------------------------
+
+def run_benchmark(audio_path: Path, sub_path: Path, model: str = "small"):
+    """Run the transcription benchmark and print results."""
+
+    # Parse subtitles
+    print("\nParsing subtitles...")
+    ref_segments = parse_subtitle_file(sub_path)
+    print(f"  {len(ref_segments)} subtitle segments found")
+
+    if not ref_segments:
+        print("Error: No subtitle segments parsed.")
+        sys.exit(1)
+
+    # Load audio
+    print("Loading audio...")
+    audio = load_audio(audio_path)
+    duration = len(audio) / 16000
+    print(f"  Duration: {duration:.1f}s ({len(audio)} samples)")
+
+    # Create and load engine
+    print(f"\nLoading MLXWhisperEngine (model={model})...")
+    engine = create_engine(backend="mlx", model=model, language="fr")
+    engine.load_model()
+    print("  Model loaded.")
+
+    # --- Full-file transcription ---
+    print("\n" + "=" * 70)
+    print("FULL-FILE TRANSCRIPTION")
+    print("=" * 70)
+
+    full_result = engine.transcribe(audio)
+    if full_result:
+        print(f"\nTranscribed text:\n  {full_result.text}\n")
+
+        # Build full reference text
+        full_ref_text = " ".join(seg.text for seg in ref_segments)
+        ref_words = normalize_text(full_ref_text)
+        hyp_words = normalize_text(full_result.text)
+
+        wer, subs, dels, ins = word_error_rate(ref_words, hyp_words)
+        print(f"Overall WER: {wer:.1%}")
+        print(f"  Reference words: {len(ref_words)}")
+        print(f"  Hypothesis words: {len(hyp_words)}")
+        print(f"  Substitutions: {subs}, Deletions: {dels}, Insertions: {ins}")
+
+        # Word confidence stats
+        if full_result.words:
+            probs = [w.probability for w in full_result.words]
+            print(f"\nWord confidence: mean={np.mean(probs):.3f}, "
+                  f"min={np.min(probs):.3f}, max={np.max(probs):.3f}")
+            low_conf = [w for w in full_result.words if w.probability < 0.5]
+            if low_conf:
+                print(f"  Low-confidence words (<0.5): "
+                      + ", ".join(f'"{w.word}" ({w.probability:.2f})' for w in low_conf[:10]))
+    else:
+        print("  No transcription produced for full file.")
+
+    # --- Segment-by-segment comparison ---
+    print("\n" + "=" * 70)
+    print("SEGMENT-BY-SEGMENT COMPARISON")
+    print("=" * 70)
+
+    segment_wers = []
+    for i, ref_seg in enumerate(ref_segments):
+        # Extract audio for this segment
+        start_sample = int(ref_seg.start * 16000)
+        end_sample = int(ref_seg.end * 16000)
+
+        # Clamp to audio bounds
+        start_sample = max(0, start_sample)
+        end_sample = min(len(audio), end_sample)
+
+        if end_sample - start_sample < 1600:  # less than 0.1s
+            continue
+
+        seg_audio = audio[start_sample:end_sample]
+        result = engine.transcribe(seg_audio)
+
+        hyp_text = result.text if result else ""
+        ref_words_seg = normalize_text(ref_seg.text)
+        hyp_words_seg = normalize_text(hyp_text)
+
+        if ref_words_seg:
+            seg_wer, _, _, _ = word_error_rate(ref_words_seg, hyp_words_seg)
+            segment_wers.append(seg_wer)
+        else:
+            seg_wer = 0.0
+
+        # Color-code: green for good, yellow for ok, red for bad
+        if seg_wer <= 0.1:
+            indicator = "OK"
+        elif seg_wer <= 0.3:
+            indicator = ".."
+        else:
+            indicator = "XX"
+
+        time_str = f"[{ref_seg.start:6.1f}s - {ref_seg.end:6.1f}s]"
+        print(f"\n  {indicator} Segment {i + 1:3d} {time_str}  WER: {seg_wer:.0%}")
+        print(f"     REF: {ref_seg.text}")
+        print(f"     HYP: {hyp_text}")
+
+        # Show per-word confidence for this segment
+        if result and result.words:
+            low = [w for w in result.words if w.probability < 0.5]
+            if low:
+                print(f"     LOW: " + ", ".join(
+                    f'"{w.word}" ({w.probability:.2f})' for w in low
+                ))
+
+    # Summary
+    if segment_wers:
+        print("\n" + "=" * 70)
+        print("SUMMARY")
+        print("=" * 70)
+        print(f"  Segments evaluated: {len(segment_wers)}")
+        print(f"  Mean segment WER:   {np.mean(segment_wers):.1%}")
+        print(f"  Median segment WER: {np.median(segment_wers):.1%}")
+        print(f"  Best segment WER:   {np.min(segment_wers):.1%}")
+        print(f"  Worst segment WER:  {np.max(segment_wers):.1%}")
+        good = sum(1 for w in segment_wers if w <= 0.1)
+        ok = sum(1 for w in segment_wers if 0.1 < w <= 0.3)
+        bad = sum(1 for w in segment_wers if w > 0.3)
+        print(f"  Good (<=10%): {good}  |  OK (<=30%): {ok}  |  Poor (>30%): {bad}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Benchmark mlx-whisper transcription accuracy against YouTube subtitles"
+    )
+    parser.add_argument(
+        "url",
+        nargs="?",
+        default=DEFAULT_VIDEO,
+        help="YouTube URL with French audio and subtitles (default: a French news clip)",
+    )
+    parser.add_argument(
+        "--model",
+        default="small",
+        help="Whisper model size: tiny, base, small, medium, large (default: small)",
+    )
+    parser.add_argument(
+        "--skip-download",
+        action="store_true",
+        help="Skip download and use existing files in test_data/",
+    )
+    args = parser.parse_args()
+
+    if not args.skip_download:
+        check_prerequisites()
+        audio_path, sub_path = download_audio_and_subs(args.url)
+    else:
+        audio_path = TEST_DATA_DIR / "audio.wav"
+        # Find existing subtitle file
+        sub_path = None
+        for f in TEST_DATA_DIR.glob("subs*"):
+            if f.suffix in (".vtt", ".srt"):
+                sub_path = f
+                break
+        if not audio_path.exists() or sub_path is None:
+            print("Error: No existing test data found. Run without --skip-download first.")
+            sys.exit(1)
+
+    run_benchmark(audio_path, sub_path, model=args.model)
+
+
+if __name__ == "__main__":
+    main()

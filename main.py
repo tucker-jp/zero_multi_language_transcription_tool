@@ -1,0 +1,299 @@
+"""French Transcription Helper — main entry point.
+
+Captures system audio via BlackHole, transcribes French speech with mlx-whisper,
+displays live clickable captions in a floating overlay, and provides
+click-to-translate via OPUS-MT with vocabulary saving and SRT export.
+"""
+
+from __future__ import annotations
+
+import sys
+import signal
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileDialog
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
+
+from config.settings import Settings
+from audio.capture import find_blackhole_device
+from workers.audio_worker import AudioWorker
+from workers.transcription_worker import TranscriptionWorker
+from workers.translation_worker import TranslationWorker
+from transcription.result import TranscriptionSegment
+from storage.database import Database
+from storage.srt_export import export_srt
+from storage.anki_export import export_anki
+from ui.overlay import OverlayWindow
+
+
+class TranscriptionApp:
+    """Wires together all workers, UI, and storage."""
+
+    def __init__(self):
+        self._settings = Settings.load()
+        self._db = Database(self._settings.db_path)
+        self._db.connect()
+        self._session_id: int | None = None
+        self._segments: list[dict] = []
+        self._last_vocab_id: int | None = None
+
+        # Workers
+        self._audio_worker: AudioWorker | None = None
+        self._transcription_worker: TranscriptionWorker | None = None
+        self._translation_worker: TranslationWorker | None = None
+
+        # UI
+        self._overlay: OverlayWindow | None = None
+        self._tray: QSystemTrayIcon | None = None
+        self._manage_window = None
+
+    def start(self):
+        self._check_blackhole()
+        self._session_id = self._db.start_session(
+            title=f"Session {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        )
+
+        self._create_overlay()
+        self._create_workers()
+        self._connect_signals()
+        self._start_workers()
+        self._create_tray()
+        self._overlay.show()
+
+    def _check_blackhole(self):
+        if not self._settings.audio_device and find_blackhole_device() is None:
+            print(
+                "ERROR: BlackHole audio device not found.\n"
+                "Please install BlackHole 2ch and set up a Multi-Output Device.\n"
+                "See setup_audio.md for instructions."
+            )
+            sys.exit(1)
+
+    def _create_overlay(self):
+        s = self._settings
+        self._overlay = OverlayWindow(
+            width=s.overlay_width,
+            height=s.overlay_height,
+            opacity=s.overlay_opacity,
+            font_size=s.font_size,
+            x=s.overlay_x,
+            y=s.overlay_y,
+        )
+
+    def _create_workers(self):
+        self._audio_worker = AudioWorker(self._settings)
+        self._transcription_worker = TranscriptionWorker(self._settings)
+        self._translation_worker = TranslationWorker(self._settings)
+
+    def _connect_signals(self):
+        aw = self._audio_worker
+        tw = self._transcription_worker
+        tl = self._translation_worker
+        ov = self._overlay
+
+        # Audio → Transcription pipeline
+        aw.speech_segment.connect(tw.enqueue)
+        aw.error.connect(self._on_error)
+        aw.status.connect(self._on_status)
+
+        # Transcription → UI + Storage
+        tw.transcription_ready.connect(self._on_transcription)
+        tw.error.connect(self._on_error)
+        tw.status.connect(self._on_status)
+
+        # Translation → auto-save + UI
+        tl.translation_ready.connect(self._on_translation_ready)
+        tl.error.connect(self._on_error)
+        tl.status.connect(self._on_status)
+
+        # UI → Workers
+        ov.pause_toggled.connect(self._on_pause_toggled)
+        ov.export_requested.connect(self._on_export)
+        ov.text_selected.connect(tl.request_translation)
+        ov.undo_save_requested.connect(self._on_undo_save)
+
+    def _start_workers(self):
+        self._transcription_worker.start()
+        self._translation_worker.start()
+        self._audio_worker.start()
+
+    def _create_tray(self):
+        # Create a simple colored circle as tray icon
+        pixmap = QPixmap(32, 32)
+        pixmap.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(100, 181, 246))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(4, 4, 24, 24)
+        painter.end()
+
+        icon = QIcon(pixmap)
+        self._tray = QSystemTrayIcon(icon)
+
+        menu = QMenu()
+        self._pause_action = menu.addAction("Pause Listening")
+        self._pause_action.triggered.connect(self._on_tray_pause)
+        menu.addSeparator()
+        show_action = menu.addAction("Show Overlay")
+        show_action.triggered.connect(self._overlay.show)
+        hide_action = menu.addAction("Hide Overlay")
+        hide_action.triggered.connect(self._overlay.hide)
+        menu.addSeparator()
+        manage_action = menu.addAction("Manage...")
+        manage_action.triggered.connect(self._on_manage)
+        menu.addSeparator()
+        export_action = menu.addAction("Export Session TXT...")
+        export_action.triggered.connect(self._on_export)
+        anki_action = menu.addAction("Export Anki Vocabulary...")
+        anki_action.triggered.connect(self._on_export_anki)
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit")
+        quit_action.triggered.connect(self._on_quit)
+
+        self._tray.setContextMenu(menu)
+        self._tray.setToolTip("French Transcription Helper")
+        self._tray.show()
+
+    def _on_transcription(self, segment: TranscriptionSegment):
+        self._overlay.set_caption(segment.text)
+        # Save to DB
+        if self._session_id is not None:
+            self._db.add_segment(self._session_id, segment)
+        # Track for SRT export
+        self._segments.append(
+            {
+                "start_time": segment.start_time,
+                "end_time": segment.end_time,
+                "text": segment.text,
+            }
+        )
+
+    def _on_pause_toggled(self, paused: bool):
+        if paused:
+            self._audio_worker.pause()
+        else:
+            self._audio_worker.resume()
+        self._pause_action.setText(
+            "Resume Listening" if paused else "Pause Listening"
+        )
+
+    def _on_tray_pause(self):
+        paused = not self._overlay.controls.is_paused
+        if paused:
+            self._audio_worker.pause()
+        else:
+            self._audio_worker.resume()
+        self._overlay.controls.set_paused(paused)
+        self._pause_action.setText(
+            "Resume Listening" if paused else "Pause Listening"
+        )
+
+    def _on_manage(self):
+        # Lazy import to keep startup fast
+        from ui.manage_window import ManageWindow
+
+        if self._manage_window is None:
+            self._manage_window = ManageWindow(self._db, self._settings)
+        self._manage_window.refresh()
+        self._manage_window.show()
+        self._manage_window.raise_()
+        self._manage_window.activateWindow()
+
+    def _on_export(self):
+        if not self._segments:
+            return
+        default_name = f"transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        path, _ = QFileDialog.getSaveFileName(
+            self._overlay,
+            "Export Transcript",
+            str(Path.home() / default_name),
+            "Text Files (*.txt)",
+        )
+        if path:
+            export_srt(self._segments, path)
+            self._on_status(f"Exported to {path}")
+
+    def _on_translation_ready(
+        self, word: str, word_trans: str, sentence: str, sentence_trans: str
+    ):
+        # Auto-save to vocabulary
+        self._last_vocab_id = self._db.save_word(
+            word, word_trans, sentence, self._session_id
+        )
+        # Then show popup
+        self._overlay.show_translation(word, word_trans, sentence, sentence_trans)
+
+    def _on_undo_save(self):
+        if self._last_vocab_id is not None:
+            self._db.delete_word(self._last_vocab_id)
+            self._last_vocab_id = None
+
+    def _on_export_anki(self):
+        vocab = self._db.get_vocabulary()
+        if not vocab:
+            self._on_status("No vocabulary to export")
+            return
+        default_name = f"anki_french_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        path, _ = QFileDialog.getSaveFileName(
+            self._overlay,
+            "Export Anki Vocabulary",
+            str(Path.home() / default_name),
+            "Text Files (*.txt)",
+        )
+        if path:
+            export_anki(vocab, path)
+            self._on_status(f"Exported {len(vocab)} words to {path}")
+
+    def _on_error(self, msg: str):
+        print(f"[ERROR] {msg}")
+
+    def _on_status(self, msg: str):
+        print(f"[STATUS] {msg}")
+
+    def _on_quit(self):
+        self._stop_workers()
+        if self._session_id is not None:
+            self._db.end_session(self._session_id)
+            # Auto-save SRT
+            if self._segments:
+                data_dir = Path(self._settings.data_dir)
+                srt_dir = data_dir / "srt"
+                srt_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"session_{self._session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                export_srt(self._segments, srt_dir / filename)
+                print(f"[STATUS] Auto-saved transcript to {srt_dir / filename}")
+        self._db.close()
+        QApplication.quit()
+
+    def _stop_workers(self):
+        if self._audio_worker:
+            self._audio_worker.stop()
+            self._audio_worker.wait(3000)
+        if self._transcription_worker:
+            self._transcription_worker.stop()
+            self._transcription_worker.wait(3000)
+        if self._translation_worker:
+            self._translation_worker.stop()
+            self._translation_worker.wait(3000)
+
+
+def main():
+    # Allow Ctrl+C to work
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+    app = QApplication(sys.argv)
+    app.setApplicationName("French Transcription Helper")
+    app.setQuitOnLastWindowClosed(False)
+
+    transcription_app = TranscriptionApp()
+    transcription_app.start()
+
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

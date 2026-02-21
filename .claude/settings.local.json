@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.siliconflow.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:picovoice.ai)",
+      "Bash(/Users/tucker/Documents/transcription_helper_french/.venv/bin/pip list)",
+      "Bash(/Users/tucker/Documents/transcription_helper_french/.venv/bin/python3:*)",
+      "Bash(python3:*)",
+      "Bash(for f in /Users/tucker/Documents/transcription_helper_french/{audio,config,storage,transcription,translation,ui,workers}/*.py /Users/tucker/Documents/transcription_helper_french/main.py)",
+      "Bash(do)",
+      "Bash(for f in /Users/tucker/Documents/transcription_helper_french/workers/*.py /Users/tucker/Documents/transcription_helper_french/ui/*.py /Users/tucker/Documents/transcription_helper_french/transcription/*.py)",
+      "Bash(echo:*)",
+      "Bash(done)"
+    ]
+  }
+}
