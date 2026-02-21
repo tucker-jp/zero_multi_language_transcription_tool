@@ -386,6 +386,19 @@ class OpenAIRealtimeWorker(QThread):
             if ws is not None:
                 try:
                     ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                    deadline = time.monotonic() + 0.6
+                    while time.monotonic() < deadline:
+                        try:
+                            raw = ws.recv()
+                        except websocket.WebSocketTimeoutException:
+                            continue
+                        if not raw:
+                            break
+                        try:
+                            event = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        self._handle_server_event(event)
                 except Exception:
                     pass
 
