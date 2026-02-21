@@ -23,3 +23,6 @@ class TranscriptionSegment:
     queue_wait_ms: float | None = None
     inference_ms: float | None = None
     end_to_caption_ms: float | None = None
+    is_final: bool = True
+    source: str = "local"
+    avg_logprob: float | None = None

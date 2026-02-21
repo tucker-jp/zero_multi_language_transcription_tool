@@ -22,6 +22,7 @@ class CaptionWidget(QTextBrowser):
         self._font_size = font_size
         self._max_segments = max_segments
         self._segments: list[str] = []
+        self._live_segment: str = ""
         self._current_sentence = ""
         self._word_spans: list[tuple[int, int]] = []  # (start, end) char positions
         self._press_word_idx: int | None = None
@@ -41,15 +42,24 @@ class CaptionWidget(QTextBrowser):
         style = CAPTION_STYLE.replace("{font_size}", str(self._font_size))
         self.setStyleSheet(style)
 
-    def set_caption(self, text: str):
-        """Append a segment and display the last N segments as rolling captions."""
+    def set_caption(self, text: str, is_final: bool = True):
+        """Update rolling captions with interim or finalized transcript text."""
         text = text.strip()
         if not text:
             return
-        self._segments.append(text)
-        if len(self._segments) > self._max_segments:
-            self._segments = self._segments[-self._max_segments:]
-        self._current_sentence = " ".join(self._segments)
+
+        if is_final:
+            self._live_segment = ""
+            self._segments.append(text)
+            if len(self._segments) > self._max_segments:
+                self._segments = self._segments[-self._max_segments:]
+        else:
+            self._live_segment = text
+
+        visible = list(self._segments)
+        if self._live_segment:
+            visible.append(self._live_segment)
+        self._current_sentence = " ".join(visible)
         self._render_segments()
 
     def _render_segments(self):
@@ -186,6 +196,7 @@ class CaptionWidget(QTextBrowser):
 
     def clear_caption(self):
         self._segments = []
+        self._live_segment = ""
         self._current_sentence = ""
         self._word_spans = []
         self.clear()

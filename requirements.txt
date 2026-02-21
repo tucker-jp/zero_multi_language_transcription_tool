@@ -7,3 +7,4 @@ silero-vad>=5.1
 transformers>=4.36
 sentencepiece>=0.1.99
 PyQt6>=6.6
+websocket-client>=1.8

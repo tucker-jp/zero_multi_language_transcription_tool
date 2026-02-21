@@ -1,6 +1,6 @@
 # French Transcription Helper
 
-A macOS desktop app that captures system audio, transcribes French speech in real time with pluggable Whisper backends (`mlx-whisper` by default, optional `faster-whisper`), and displays live clickable captions in a floating overlay — even above fullscreen apps. Click any word or drag to select a phrase for instant French-to-English translation via OPUS-MT. Translations are auto-saved to vocabulary (with one-click Undo). Supports readable plain-text transcript export and Anki-compatible vocabulary export.
+A macOS desktop app that captures system audio, transcribes French speech in real time with pluggable STT providers (`mlx-whisper` local by default, optional `faster-whisper`, optional OpenAI Realtime `gpt-4o-mini-transcribe`), and displays live clickable captions in a floating overlay — even above fullscreen apps. Click any word or drag to select a phrase for instant French-to-English translation via OPUS-MT. Translations are auto-saved to vocabulary (with one-click Undo). Supports readable plain-text transcript export and Anki-compatible vocabulary export.
 
 ## Prerequisites
 
@@ -25,6 +25,11 @@ Optional backend for local A/B testing:
 pip install faster-whisper
 ```
 
+For OpenAI Realtime transcription, set your API key before launch:
+```bash
+export OPENAI_API_KEY=\"your_key_here\"
+```
+
 ## Building the .app Bundle
 
 To package as a standalone macOS application:
@@ -47,6 +52,8 @@ python main.py
 ```
 
 A floating overlay appears at the bottom of your screen and a system tray icon (blue circle) is added.
+
+To use OpenAI Realtime, set `stt_provider` to `"openai_realtime"` in `~/.transcription_helper/settings.json`.
 
 ### Using the overlay
 
@@ -93,6 +100,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `vad_silence_ms` | `350` | Silence duration (ms) to trigger end-of-speech |
 | `vad_min_speech_ms` | `200` | Ignore speech segments shorter than this (ms) |
 | `max_speech_seconds` | `3.0` | Force a segment break during long continuous speech (seconds) |
+| `stt_provider` | `"local"` | STT provider (`local` or `openai_realtime`) |
 | `transcription_backend` | `"mlx"` | STT backend (`mlx` or `faster_whisper`) |
 | `whisper_model` | `"small"` | Whisper model size (`tiny`, `base`, `small`, `medium`, `large`) |
 | `language` | `"fr"` | Source language code |
@@ -100,6 +108,15 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `segment_overlap_seconds` | `1.0` | Overlap between consecutive segments |
 | `word_timestamps` | `false` | Enable per-word timestamps (slower when `true`) |
 | `faster_whisper_compute_type` | `"int8"` | Compute type when using `faster_whisper` |
+| `openai_api_key` | `""` | Optional API key override (otherwise uses `OPENAI_API_KEY`) |
+| `openai_realtime_model` | `"gpt-4o-mini-transcribe"` | OpenAI realtime transcription model |
+| `openai_realtime_prompt` | `""` | Optional transcription prompt/biasing text |
+| `openai_realtime_url` | `"wss://api.openai.com/v1/realtime?intent=transcription"` | OpenAI realtime websocket endpoint |
+| `openai_realtime_noise_reduction` | `"near_field"` | Noise reduction profile (`near_field`, `far_field`, `none`) |
+| `openai_realtime_include_logprobs` | `true` | Request token logprobs in completed events |
+| `openai_realtime_vad_threshold` | `0.5` | Server VAD detection threshold |
+| `openai_realtime_vad_prefix_padding_ms` | `300` | Server VAD prefix padding in ms |
+| `openai_realtime_vad_silence_ms` | `500` | Server VAD silence duration in ms |
 | `translation_model` | `"Helsinki-NLP/opus-mt-fr-en"` | HuggingFace translation model |
 | `translation_cache_size` | `1000` | Number of cached translations (LRU) |
 | `transcription_queue_maxsize` | `8` | Max pending audio segments before dropping oldest |
@@ -126,7 +143,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
                    speech segments
                          |
                TranscriptionWorker (QThread)
-            mlx-whisper / faster-whisper
+         mlx-whisper / faster-whisper (local)
                          |
                   transcribed text
                     /         \
@@ -139,6 +156,10 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
            OPUS-MT
               |
         translation popup
+
+Alternative STT path:
+  AudioWorker raw chunks -> OpenAIRealtimeWorker (gpt-4o-mini-transcribe)
+                      -> partial/final captions -> Overlay + Database
 ```
 
 | Module | Purpose |
@@ -156,6 +177,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `translation/cache.py` | LRU translation cache |
 | `workers/audio_worker.py` | QThread for audio capture + VAD |
 | `workers/transcription_worker.py` | QThread for Whisper transcription |
+| `workers/openai_realtime_worker.py` | QThread for OpenAI realtime transcription |
 | `workers/translation_worker.py` | QThread for text translation (words and phrases) |
 | `ui/overlay.py` | Frameless floating overlay window (fullscreen-aware) |
 | `ui/caption_widget.py` | Clickable caption text display |

@@ -20,6 +20,7 @@ from config.settings import Settings
 from audio.capture import find_blackhole_device
 from workers.audio_worker import AudioWorker
 from workers.transcription_worker import TranscriptionWorker
+from workers.openai_realtime_worker import OpenAIRealtimeWorker
 from workers.translation_worker import TranslationWorker
 from transcription.result import TranscriptionSegment
 from storage.database import Database
@@ -44,6 +45,7 @@ class TranscriptionApp:
         # Workers
         self._audio_worker: AudioWorker | None = None
         self._transcription_worker: TranscriptionWorker | None = None
+        self._openai_realtime_worker: OpenAIRealtimeWorker | None = None
         self._translation_worker: TranslationWorker | None = None
 
         # UI
@@ -87,24 +89,35 @@ class TranscriptionApp:
 
     def _create_workers(self):
         self._audio_worker = AudioWorker(self._settings)
-        self._transcription_worker = TranscriptionWorker(self._settings)
+        if self._settings.stt_provider == "openai_realtime":
+            self._openai_realtime_worker = OpenAIRealtimeWorker(self._settings)
+            self._transcription_worker = None
+        else:
+            self._transcription_worker = TranscriptionWorker(self._settings)
+            self._openai_realtime_worker = None
         self._translation_worker = TranslationWorker(self._settings)
 
     def _connect_signals(self):
         aw = self._audio_worker
         tw = self._transcription_worker
+        ow = self._openai_realtime_worker
         tl = self._translation_worker
         ov = self._overlay
 
         # Audio → Transcription pipeline
-        aw.speech_segment.connect(tw.enqueue)
+        if tw is not None:
+            aw.speech_segment.connect(tw.enqueue)
+            tw.transcription_ready.connect(self._on_transcription)
+            tw.error.connect(self._on_error)
+            tw.status.connect(self._on_status)
+        elif ow is not None:
+            aw.audio_chunk.connect(ow.enqueue_audio_chunk)
+            ow.transcription_ready.connect(self._on_transcription)
+            ow.error.connect(self._on_error)
+            ow.status.connect(self._on_status)
+
         aw.error.connect(self._on_error)
         aw.status.connect(self._on_status)
-
-        # Transcription → UI + Storage
-        tw.transcription_ready.connect(self._on_transcription)
-        tw.error.connect(self._on_error)
-        tw.status.connect(self._on_status)
 
         # Translation → auto-save + UI
         tl.translation_ready.connect(self._on_translation_ready)
@@ -118,7 +131,10 @@ class TranscriptionApp:
         ov.undo_save_requested.connect(self._on_undo_save)
 
     def _start_workers(self):
-        self._transcription_worker.start()
+        if self._transcription_worker:
+            self._transcription_worker.start()
+        if self._openai_realtime_worker:
+            self._openai_realtime_worker.start()
         self._translation_worker.start()
         self._audio_worker.start()
 
@@ -167,7 +183,9 @@ class TranscriptionApp:
         self._tray.show()
 
     def _on_transcription(self, segment: TranscriptionSegment):
-        self._overlay.set_caption(segment.text)
+        self._overlay.set_caption(segment.text, is_final=segment.is_final)
+        if not segment.is_final:
+            return
         if self._session_id is not None:
             self._pending_db_segments.append(segment)
             if len(self._pending_db_segments) >= 10:
@@ -315,6 +333,9 @@ class TranscriptionApp:
         if self._transcription_worker:
             self._transcription_worker.stop()
             self._transcription_worker.wait(3000)
+        if self._openai_realtime_worker:
+            self._openai_realtime_worker.stop()
+            self._openai_realtime_worker.wait(3000)
         if self._translation_worker:
             self._translation_worker.stop()
             self._translation_worker.wait(3000)

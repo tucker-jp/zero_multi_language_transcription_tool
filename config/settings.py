@@ -30,6 +30,7 @@ class Settings:
     max_speech_seconds: float = 3.0  # force segment break during long speech
 
     # Transcription
+    stt_provider: str = "local"  # local, openai_realtime
     transcription_backend: str = "mlx"  # mlx, faster_whisper
     whisper_model: str = "small"
     language: str = "fr"
@@ -37,6 +38,15 @@ class Settings:
     segment_overlap_seconds: float = 1.0
     word_timestamps: bool = False
     faster_whisper_compute_type: str = "int8"
+    openai_api_key: str = ""
+    openai_realtime_model: str = "gpt-4o-mini-transcribe"
+    openai_realtime_prompt: str = ""
+    openai_realtime_url: str = "wss://api.openai.com/v1/realtime?intent=transcription"
+    openai_realtime_noise_reduction: str = "near_field"
+    openai_realtime_include_logprobs: bool = True
+    openai_realtime_vad_threshold: float = 0.5
+    openai_realtime_vad_prefix_padding_ms: int = 300
+    openai_realtime_vad_silence_ms: int = 500
 
     # Translation
     translation_model: str = "Helsinki-NLP/opus-mt-fr-en"
@@ -78,6 +88,8 @@ class Settings:
             settings = cls(**filtered)
             if settings.performance_profile not in {"live", "balanced", "accurate"}:
                 settings.performance_profile = "live"
+            if settings.stt_provider not in {"local", "openai_realtime"}:
+                settings.stt_provider = "local"
             if settings.transcription_backend not in {"mlx", "faster_whisper"}:
                 settings.transcription_backend = "mlx"
             settings.transcription_queue_maxsize = max(
@@ -89,6 +101,15 @@ class Settings:
             settings.live_latency_target_ms = max(300, int(settings.live_latency_target_ms))
             settings.latency_log_every_n_segments = max(
                 1, int(settings.latency_log_every_n_segments)
+            )
+            settings.openai_realtime_vad_threshold = min(
+                0.99, max(0.0, float(settings.openai_realtime_vad_threshold))
+            )
+            settings.openai_realtime_vad_prefix_padding_ms = max(
+                0, int(settings.openai_realtime_vad_prefix_padding_ms)
+            )
+            settings.openai_realtime_vad_silence_ms = max(
+                100, int(settings.openai_realtime_vad_silence_ms)
             )
             return settings
         return cls()

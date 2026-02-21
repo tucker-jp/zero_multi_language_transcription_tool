@@ -93,8 +93,8 @@ class OverlayWindow(QWidget):
         pos = self.mapToGlobal(QPoint(self.width() // 2 - popup_width // 2, -220))
         self.popup.show_translation(text, text_trans, sentence, sentence_trans, pos)
 
-    def set_caption(self, text: str):
-        self.caption.set_caption(text)
+    def set_caption(self, text: str, is_final: bool = True):
+        self.caption.set_caption(text, is_final=is_final)
 
     def paintEvent(self, event):
         painter = QPainter(self)

@@ -19,6 +19,7 @@ class AudioWorker(QThread):
     speech_segment = pyqtSignal(
         np.ndarray, float, float, float, float
     )  # (audio, start_offset, end_offset, audio_to_emit_ms, emitted_mono)
+    audio_chunk = pyqtSignal(np.ndarray, float, float)  # (audio, chunk_start, chunk_end)
     error = pyqtSignal(str)
     status = pyqtSignal(str)  # status messages
 
@@ -68,30 +69,35 @@ class AudioWorker(QThread):
                 )
                 return
 
-        self.status.emit("Loading VAD model...")
-        try:
-            vad = SileroVAD(
-                threshold=settings.vad_threshold,
-                sample_rate=settings.sample_rate,
-                silence_ms=silence_ms,
-                min_speech_ms=settings.vad_min_speech_ms,
-            )
-        except Exception as e:
-            self.error.emit(f"Failed to load VAD: {e}")
-            return
-
-        # Ring buffer holds enough audio for max segment + silence padding
-        buf = RingBuffer(
-            max_seconds=settings.max_segment_seconds + 5.0,
-            sample_rate=settings.sample_rate,
-        )
-
         session_start = time.monotonic()
         speech_start_time: float | None = None
         max_speech_samples = int(max_speech_seconds * settings.sample_rate)
 
+        vad = None
+        buf = None
+        if settings.stt_provider == "local":
+            self.status.emit("Loading VAD model...")
+            try:
+                vad = SileroVAD(
+                    threshold=settings.vad_threshold,
+                    sample_rate=settings.sample_rate,
+                    silence_ms=silence_ms,
+                    min_speech_ms=settings.vad_min_speech_ms,
+                )
+            except Exception as e:
+                self.error.emit(f"Failed to load VAD: {e}")
+                return
+
+            # Ring buffer holds enough audio for max segment + silence padding
+            buf = RingBuffer(
+                max_seconds=settings.max_segment_seconds + 5.0,
+                sample_rate=settings.sample_rate,
+            )
+
         def emit_segment(total_samples: int):
             nonlocal speech_start_time
+            if buf is None:
+                return
             segment_audio = buf.read_last(total_samples)
             offset = speech_start_time if speech_start_time is not None else 0.0
             segment_duration = len(segment_audio) / settings.sample_rate
@@ -110,6 +116,17 @@ class AudioWorker(QThread):
         def on_audio(audio: np.ndarray):
             nonlocal speech_start_time
             if self._paused or not self._running:
+                return
+
+            now_offset = time.monotonic() - session_start
+            chunk_duration = len(audio) / settings.sample_rate
+            chunk_start = max(0.0, now_offset - chunk_duration)
+            self.audio_chunk.emit(audio, chunk_start, now_offset)
+
+            if settings.stt_provider == "openai_realtime":
+                return
+
+            if buf is None or vad is None:
                 return
 
             buf.write(audio)
