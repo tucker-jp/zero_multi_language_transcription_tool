@@ -12,7 +12,6 @@ import signal
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileDialog
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
@@ -24,8 +23,8 @@ from workers.transcription_worker import TranscriptionWorker
 from workers.translation_worker import TranslationWorker
 from transcription.result import TranscriptionSegment
 from storage.database import Database
-from storage.srt_export import export_srt
 from storage.anki_export import export_anki
+from storage.txt_export import export_txt
 from ui.overlay import OverlayWindow
 
 
@@ -214,8 +213,8 @@ class TranscriptionApp:
             "Text Files (*.txt)",
         )
         if path:
-            export_srt(self._segments, path)
-            self._on_status(f"Exported to {path}")
+            export_txt(self._segments, path, include_timestamps=True)
+            self._on_status(f"Exported TXT to {path}")
 
     def _on_translation_ready(
         self, word: str, word_trans: str, sentence: str, sentence_trans: str
@@ -258,14 +257,14 @@ class TranscriptionApp:
         self._stop_workers()
         if self._session_id is not None:
             self._db.end_session(self._session_id)
-            # Auto-save SRT
+            # Auto-save plain-text transcript
             if self._segments:
                 data_dir = Path(self._settings.data_dir)
-                srt_dir = data_dir / "srt"
-                srt_dir.mkdir(parents=True, exist_ok=True)
+                txt_dir = data_dir / "transcripts"
+                txt_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"session_{self._session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-                export_srt(self._segments, srt_dir / filename)
-                print(f"[STATUS] Auto-saved transcript to {srt_dir / filename}")
+                export_txt(self._segments, txt_dir / filename, include_timestamps=True)
+                print(f"[STATUS] Auto-saved transcript to {txt_dir / filename}")
         self._db.close()
         QApplication.quit()
 

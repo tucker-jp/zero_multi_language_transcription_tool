@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 
 from PyQt6.QtWidgets import QTextBrowser
@@ -57,7 +58,7 @@ class CaptionWidget(QTextBrowser):
         html_parts = []
         for w in all_words:
             html_parts.append(
-                f'<span style="cursor: pointer;">{w}</span>'
+                f'<span style="cursor: pointer;">{html.escape(w)}</span>'
             )
         html = " ".join(html_parts)
         self.setHtml(

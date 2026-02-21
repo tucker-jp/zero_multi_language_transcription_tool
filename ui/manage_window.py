@@ -25,7 +25,6 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QStandardItem
 
 from config.settings import Settings
 from storage.database import Database
@@ -194,6 +193,7 @@ class VocabularyTab(QWidget):
         )
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.itemChanged.connect(self._update_count)
 
         # Column sizing
         header = self._table.horizontalHeader()
@@ -206,6 +206,7 @@ class VocabularyTab(QWidget):
         layout.addWidget(self._table)
 
     def refresh(self):
+        self._table.blockSignals(True)
         self._table.setRowCount(0)
         vocab = self._db.get_vocabulary()
 
@@ -242,7 +243,7 @@ class VocabularyTab(QWidget):
                 date_str = added_at
             self._table.setItem(row, 4, QTableWidgetItem(date_str))
 
-        self._table.itemChanged.connect(self._update_count)
+        self._table.blockSignals(False)
         self._update_count()
 
     def _update_count(self):
@@ -255,21 +256,21 @@ class VocabularyTab(QWidget):
         self._count_label.setText(f"{checked} of {total} selected")
 
     def _select_all(self):
-        self._table.itemChanged.disconnect(self._update_count)
+        self._table.blockSignals(True)
         for row in range(self._table.rowCount()):
             item = self._table.item(row, 0)
             if item:
                 item.setCheckState(Qt.CheckState.Checked)
-        self._table.itemChanged.connect(self._update_count)
+        self._table.blockSignals(False)
         self._update_count()
 
     def _deselect_all(self):
-        self._table.itemChanged.disconnect(self._update_count)
+        self._table.blockSignals(True)
         for row in range(self._table.rowCount()):
             item = self._table.item(row, 0)
             if item:
                 item.setCheckState(Qt.CheckState.Unchecked)
-        self._table.itemChanged.connect(self._update_count)
+        self._table.blockSignals(False)
         self._update_count()
 
     def _get_checked_rows(self) -> list[int]:

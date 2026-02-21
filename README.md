@@ -1,6 +1,6 @@
 # French Transcription Helper
 
-A macOS desktop app that captures system audio, transcribes French speech in real time using mlx-whisper (Apple Silicon optimized), and displays live clickable captions in a floating overlay — even above fullscreen apps. Click any word or drag to select a phrase for instant French-to-English translation via OPUS-MT. Translations are auto-saved to vocabulary (with one-click Undo). Supports SRT subtitle export and Anki-compatible vocabulary export.
+A macOS desktop app that captures system audio, transcribes French speech in real time using mlx-whisper (Apple Silicon optimized), and displays live clickable captions in a floating overlay — even above fullscreen apps. Click any word or drag to select a phrase for instant French-to-English translation via OPUS-MT. Translations are auto-saved to vocabulary (with one-click Undo). Supports readable plain-text transcript export and Anki-compatible vocabulary export.
 
 ## Prerequisites
 
@@ -50,7 +50,7 @@ A floating overlay appears at the bottom of your screen and a system tray icon (
 - **Drag across words** to select a phrase for translation (labeled "PHRASE") — selected words highlight in blue during the drag, also auto-saved
 - **Undo Save** button in the popup removes the last auto-saved word/phrase from vocabulary
 - **Pause/Resume** button on the overlay toggles audio capture
-- **Export SRT** button opens a save dialog for subtitle export
+- **Export Session TXT** button opens a save dialog for plain-text transcript export
 - **Fullscreen support** — overlay stays visible above fullscreen apps and on all Spaces
 
 ### System tray menu
@@ -58,7 +58,7 @@ A floating overlay appears at the bottom of your screen and a system tray icon (
 - **Pause/Resume Listening** — toggle audio capture (syncs with overlay button)
 - **Show/Hide Overlay** — toggle overlay visibility
 - **Manage...** — opens the management window to browse sessions, manage vocabulary with select/delete, and export filtered vocabulary to Anki. Includes a language selector (French active; Spanish and German coming soon).
-- **Export SRT...** — manually export subtitles
+- **Export Session TXT...** — manually export transcript text
 - **Export Anki Vocabulary...** — export all saved vocabulary as a tab-separated `.txt` file (front=French, back=English) ready for Anki import
 - **Quit** — stop all workers and exit
 
@@ -68,7 +68,7 @@ Quit via the tray menu or press **Ctrl+C** in the terminal. On exit the app auto
 
 1. Stops workers (audio, then transcription, then translation)
 2. Ends the database session
-3. Auto-exports an SRT file to `~/.transcription_helper/srt/`
+3. Auto-exports a TXT transcript to `~/.transcription_helper/transcripts/`
 4. Closes the database
 
 ## Configuration
@@ -77,7 +77,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 
 | Setting | Default | Description |
 |---|---|---|
-| `audio_device` | `null` | Audio input device name. `null` = auto-detect BlackHole |
+| `audio_device` | `null` | Audio input device name or index. `null` = auto-detect BlackHole |
 | `sample_rate` | `16000` | Audio sample rate in Hz |
 | `channels` | `1` | Number of audio channels |
 | `chunk_duration_ms` | `30` | Duration of each VAD chunk in ms |
@@ -91,6 +91,8 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `segment_overlap_seconds` | `1.0` | Overlap between consecutive segments |
 | `translation_model` | `"Helsinki-NLP/opus-mt-fr-en"` | HuggingFace translation model |
 | `translation_cache_size` | `1000` | Number of cached translations (LRU) |
+| `transcription_queue_maxsize` | `8` | Max pending audio segments before dropping oldest |
+| `translation_queue_maxsize` | `32` | Max pending translation requests before dropping oldest |
 | `overlay_opacity` | `0.85` | Overlay window opacity (0-1) |
 | `font_size` | `22` | Caption text size in points |
 | `overlay_width` | `800` | Overlay width in pixels |
@@ -152,7 +154,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `ui/manage_styles.py` | Qt stylesheets (management window) |
 | `ui/manage_window.py` | Management window for sessions and vocabulary |
 | `storage/database.py` | SQLite database for sessions, segments, vocabulary |
-| `storage/srt_export.py` | SRT subtitle file export |
+| `storage/txt_export.py` | Plain-text transcript export |
 | `storage/anki_export.py` | Anki-compatible tab-separated vocabulary export |
 
 ## Transcription Accuracy Testing

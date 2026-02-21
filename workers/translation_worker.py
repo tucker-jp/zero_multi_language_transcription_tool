@@ -20,11 +20,34 @@ class TranslationWorker(QThread):
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
         self._settings = settings
-        self._queue: queue.Queue[tuple[str, str] | None] = queue.Queue()
+        maxsize = max(1, int(settings.translation_queue_maxsize))
+        self._queue: queue.Queue[tuple[str, str] | None] = queue.Queue(maxsize=maxsize)
         self._running = False
+        self._dropped_count = 0
 
     def request_translation(self, text: str, sentence: str):
-        self._queue.put((text, sentence))
+        item = (text, sentence)
+        try:
+            self._queue.put_nowait(item)
+            return
+        except queue.Full:
+            pass
+
+        try:
+            self._queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        try:
+            self._queue.put_nowait(item)
+        except queue.Full:
+            return
+
+        self._dropped_count += 1
+        if self._dropped_count % 25 == 0:
+            self.status.emit(
+                f"Translation queue overloaded; dropped {self._dropped_count} requests."
+            )
 
     def run(self):
         self._running = True
@@ -59,4 +82,14 @@ class TranslationWorker(QThread):
 
     def stop(self):
         self._running = False
-        self._queue.put(None)
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:
+                pass

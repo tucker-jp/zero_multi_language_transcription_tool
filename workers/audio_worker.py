@@ -7,7 +7,7 @@ import time
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from audio.capture import AudioCapture, find_blackhole_device
+from audio.capture import AudioCapture, find_blackhole_device, resolve_input_device
 from audio.vad import SileroVAD
 from audio.buffer import RingBuffer
 from config.settings import Settings
@@ -33,7 +33,11 @@ class AudioWorker(QThread):
         # Find audio device
         device = None
         if settings.audio_device:
-            device = int(settings.audio_device)
+            try:
+                device = resolve_input_device(settings.audio_device)
+            except ValueError as e:
+                self.error.emit(str(e))
+                return
         else:
             device = find_blackhole_device()
             if device is None:

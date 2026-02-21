@@ -13,7 +13,7 @@ DEFAULT_CONFIG_PATH = DEFAULT_DATA_DIR / "settings.json"
 @dataclass
 class Settings:
     # Audio
-    audio_device: str | None = None  # None = use BlackHole auto-detect
+    audio_device: str | int | None = None  # name or index; None = BlackHole auto-detect
     sample_rate: int = 16000
     channels: int = 1
     chunk_duration_ms: int = 30  # ms per VAD chunk
@@ -33,6 +33,8 @@ class Settings:
     # Translation
     translation_model: str = "Helsinki-NLP/opus-mt-fr-en"
     translation_cache_size: int = 1000
+    transcription_queue_maxsize: int = 8
+    translation_queue_maxsize: int = 32
 
     # UI
     overlay_opacity: float = 0.85

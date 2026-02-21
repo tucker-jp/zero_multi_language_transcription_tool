@@ -27,6 +27,54 @@ def list_input_devices() -> list[dict]:
     return result
 
 
+def resolve_input_device(device_spec: str | int | None) -> int | None:
+    """Resolve a configured device name/index to a concrete sounddevice input index."""
+    if device_spec is None:
+        return None
+
+    devices = sd.query_devices()
+
+    def _is_valid_input_index(index: int) -> bool:
+        return 0 <= index < len(devices) and devices[index]["max_input_channels"] >= 1
+
+    if isinstance(device_spec, int):
+        if _is_valid_input_index(device_spec):
+            return device_spec
+        raise ValueError(f"Configured audio_device index {device_spec} is not a valid input device.")
+
+    spec = str(device_spec).strip()
+    if not spec:
+        return None
+
+    # Support numeric strings like "2" in settings files.
+    try:
+        index = int(spec)
+    except ValueError:
+        index = None
+
+    if index is not None:
+        if _is_valid_input_index(index):
+            return index
+        raise ValueError(f"Configured audio_device index {index} is not a valid input device.")
+
+    spec_lower = spec.lower()
+
+    # Prefer exact name match first.
+    for i, d in enumerate(devices):
+        if d["max_input_channels"] >= 1 and d["name"].lower() == spec_lower:
+            return i
+
+    # Then allow substring match.
+    for i, d in enumerate(devices):
+        if d["max_input_channels"] >= 1 and spec_lower in d["name"].lower():
+            return i
+
+    available = ", ".join(d["name"] for d in devices if d["max_input_channels"] >= 1)
+    raise ValueError(
+        f'Configured audio_device "{spec}" not found. Available input devices: {available}'
+    )
+
+
 class AudioCapture:
     """Captures audio from a sounddevice input (typically BlackHole)."""
 

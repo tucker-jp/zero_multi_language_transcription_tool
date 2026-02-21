@@ -22,11 +22,37 @@ class TranscriptionWorker(QThread):
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
         self._settings = settings
-        self._queue: queue.Queue[tuple[np.ndarray, float] | None] = queue.Queue()
+        maxsize = max(1, int(settings.transcription_queue_maxsize))
+        self._queue: queue.Queue[tuple[np.ndarray, float] | None] = queue.Queue(
+            maxsize=maxsize
+        )
         self._running = False
+        self._dropped_count = 0
 
     def enqueue(self, audio: np.ndarray, session_offset: float):
-        self._queue.put((audio, session_offset))
+        item = (audio, session_offset)
+        try:
+            self._queue.put_nowait(item)
+            return
+        except queue.Full:
+            pass
+
+        # Keep captions live by dropping oldest pending audio if overloaded.
+        try:
+            self._queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        try:
+            self._queue.put_nowait(item)
+        except queue.Full:
+            return
+
+        self._dropped_count += 1
+        if self._dropped_count % 25 == 0:
+            self.status.emit(
+                f"Transcription queue overloaded; dropped {self._dropped_count} segments."
+            )
 
     def run(self):
         self._running = True
@@ -63,4 +89,14 @@ class TranscriptionWorker(QThread):
 
     def stop(self):
         self._running = False
-        self._queue.put(None)  # Unblock the queue
+        try:
+            self._queue.put_nowait(None)  # Unblock the queue
+        except queue.Full:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:
+                pass
