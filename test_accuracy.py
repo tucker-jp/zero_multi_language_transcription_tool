@@ -64,9 +64,6 @@ def parse_subtitle_file(path: Path) -> list[SubSegment]:
     text = path.read_text(encoding="utf-8", errors="replace")
     segments = []
 
-    # Detect format
-    is_vtt = text.strip().startswith("WEBVTT")
-
     # Unified regex: matches "00:00:01.000 --> 00:00:04.000" style lines
     time_re = re.compile(
         r"(\d{1,2}:?\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,2}:?\d{2}:\d{2}[.,]\d{3})"
@@ -105,6 +102,72 @@ def parse_subtitle_file(path: Path) -> list[SubSegment]:
     return deduped
 
 
+def merge_short_segments(
+    segments: list[SubSegment],
+    min_duration_s: float = 0.9,
+    max_gap_s: float = 0.12,
+) -> list[SubSegment]:
+    """Merge short/adjacent subtitle cues into evaluation windows.
+
+    YouTube subtitles often contain overlapping micro-cues (10-50ms) that make
+    per-cue WER meaningless. This reduces alignment noise.
+    """
+    if not segments:
+        return []
+
+    merged: list[SubSegment] = []
+    cur = SubSegment(
+        start=segments[0].start,
+        end=segments[0].end,
+        text=segments[0].text,
+    )
+
+    def cur_duration() -> float:
+        return max(0.0, cur.end - cur.start)
+
+    for seg in segments[1:]:
+        gap = seg.start - cur.end
+        should_merge = gap <= max_gap_s or cur_duration() < min_duration_s
+        if should_merge:
+            cur.end = max(cur.end, seg.end)
+            cur.text = f"{cur.text} {seg.text}".strip()
+        else:
+            merged.append(cur)
+            cur = SubSegment(start=seg.start, end=seg.end, text=seg.text)
+
+    merged.append(cur)
+    return merged
+
+
+def choose_subtitle_file(files: list[Path]) -> Path | None:
+    """Pick the best subtitle candidate deterministically."""
+    if not files:
+        return None
+
+    # Prefer human-created FR origin subtitles, then FR VTT, then anything else.
+    priority_patterns = [
+        ".fr-orig.vtt",
+        ".fr.vtt",
+        ".fr-FR.vtt",
+        ".fr.srt",
+        ".vtt",
+        ".srt",
+    ]
+
+    def score(path: Path) -> tuple[int, int]:
+        name = path.name
+        prio = len(priority_patterns)
+        for i, suffix in enumerate(priority_patterns):
+            if name.endswith(suffix):
+                prio = i
+                break
+        # Larger file tends to include fuller subtitle content.
+        size = path.stat().st_size if path.exists() else 0
+        return (prio, -size)
+
+    return sorted(files, key=score)[0]
+
+
 # ---------------------------------------------------------------------------
 # Download helpers
 # ---------------------------------------------------------------------------
@@ -130,7 +193,6 @@ def download_audio_and_subs(url: str) -> tuple[Path, Path]:
     TEST_DATA_DIR.mkdir(exist_ok=True)
 
     audio_path = TEST_DATA_DIR / "audio.wav"
-    sub_path = None
 
     # Download subtitles (prefer manual, fall back to auto-generated)
     print("Downloading subtitles...")
@@ -150,18 +212,8 @@ def download_audio_and_subs(url: str) -> tuple[Path, Path]:
     )
 
     # Find the subtitle file that was downloaded
-    for ext in [".fr.vtt", ".fr.srt"]:
-        candidate = TEST_DATA_DIR / f"subs{ext}"
-        if candidate.exists():
-            sub_path = candidate
-            break
-
-    if sub_path is None:
-        # Check for any vtt/srt files in test_data
-        for f in TEST_DATA_DIR.glob("subs*"):
-            if f.suffix in (".vtt", ".srt"):
-                sub_path = f
-                break
+    candidates = [f for f in TEST_DATA_DIR.glob("subs*") if f.suffix in (".vtt", ".srt")]
+    sub_path = choose_subtitle_file(candidates)
 
     if sub_path is None:
         print("Error: Could not download French subtitles for this video.")
@@ -242,6 +294,24 @@ def normalize_text(text: str) -> list[str]:
     return [w for w in words if w]
 
 
+def repetition_metrics(words: list[str]) -> tuple[float, int]:
+    """Return (adjacent_repeat_ratio, max_consecutive_run)."""
+    if len(words) < 2:
+        return 0.0, 1 if words else 0
+
+    repeated_edges = 0
+    max_run = 1
+    cur_run = 1
+    for i in range(1, len(words)):
+        if words[i] == words[i - 1]:
+            repeated_edges += 1
+            cur_run += 1
+            max_run = max(max_run, cur_run)
+        else:
+            cur_run = 1
+    return repeated_edges / (len(words) - 1), max_run
+
+
 def word_error_rate(reference: list[str], hypothesis: list[str]) -> tuple[float, int, int, int]:
     """Compute WER using Levenshtein edit distance on word sequences.
 
@@ -296,13 +366,29 @@ def word_error_rate(reference: list[str], hypothesis: list[str]) -> tuple[float,
 # Main benchmark
 # ---------------------------------------------------------------------------
 
-def run_benchmark(audio_path: Path, sub_path: Path, model: str = "small"):
+def run_benchmark(
+    audio_path: Path,
+    sub_path: Path,
+    model: str = "small",
+    merge_short_ms: int = 900,
+    merge_gap_ms: int = 120,
+):
     """Run the transcription benchmark and print results."""
 
     # Parse subtitles
     print("\nParsing subtitles...")
-    ref_segments = parse_subtitle_file(sub_path)
-    print(f"  {len(ref_segments)} subtitle segments found")
+    raw_ref_segments = parse_subtitle_file(sub_path)
+    print(f"  Raw subtitle segments: {len(raw_ref_segments)}")
+
+    ref_segments = merge_short_segments(
+        raw_ref_segments,
+        min_duration_s=merge_short_ms / 1000.0,
+        max_gap_s=merge_gap_ms / 1000.0,
+    )
+    print(
+        f"  Merged evaluation windows: {len(ref_segments)} "
+        f"(min={merge_short_ms}ms, gap={merge_gap_ms}ms)"
+    )
 
     if not ref_segments:
         print("Error: No subtitle segments parsed.")
@@ -344,6 +430,11 @@ def run_benchmark(audio_path: Path, sub_path: Path, model: str = "small"):
         print(f"  Reference words: {len(ref_words)}")
         print(f"  Hypothesis words: {len(hyp_words)}")
         print(f"  Substitutions: {subs}, Deletions: {dels}, Insertions: {ins}")
+        rep_ratio, max_run = repetition_metrics(hyp_words)
+        print(
+            f"  Adjacent repetition: {rep_ratio:.1%} "
+            f"(max consecutive run={max_run})"
+        )
 
         # Word confidence stats
         if full_result.words:
@@ -363,6 +454,7 @@ def run_benchmark(audio_path: Path, sub_path: Path, model: str = "small"):
     print("=" * 70)
 
     segment_wers = []
+    repetition_alerts = 0
     for i, ref_seg in enumerate(ref_segments):
         # Extract audio for this segment
         start_sample = int(ref_seg.start * 16000)
@@ -400,6 +492,13 @@ def run_benchmark(audio_path: Path, sub_path: Path, model: str = "small"):
         print(f"\n  {indicator} Segment {i + 1:3d} {time_str}  WER: {seg_wer:.0%}")
         print(f"     REF: {ref_seg.text}")
         print(f"     HYP: {hyp_text}")
+        rep_ratio, max_run = repetition_metrics(hyp_words_seg)
+        if rep_ratio >= 0.20 or max_run >= 4:
+            repetition_alerts += 1
+            print(
+                f"     REP: ratio={rep_ratio:.1%}, max-run={max_run} "
+                "(possible hallucination loop)"
+            )
 
         # Show per-word confidence for this segment
         if result and result.words:
@@ -423,6 +522,7 @@ def run_benchmark(audio_path: Path, sub_path: Path, model: str = "small"):
         ok = sum(1 for w in segment_wers if 0.1 < w <= 0.3)
         bad = sum(1 for w in segment_wers if w > 0.3)
         print(f"  Good (<=10%): {good}  |  OK (<=30%): {ok}  |  Poor (>30%): {bad}")
+        print(f"  Repetition-alert segments: {repetition_alerts}")
 
 
 def main():
@@ -445,6 +545,23 @@ def main():
         action="store_true",
         help="Skip download and use existing files in test_data/",
     )
+    parser.add_argument(
+        "--subtitle",
+        default="",
+        help="Optional subtitle file path to use instead of auto-discovery.",
+    )
+    parser.add_argument(
+        "--merge-short-ms",
+        type=int,
+        default=900,
+        help="Merge reference subtitle windows shorter than this (default: 900).",
+    )
+    parser.add_argument(
+        "--merge-gap-ms",
+        type=int,
+        default=120,
+        help="Merge adjacent subtitle windows if gap <= this (default: 120).",
+    )
     args = parser.parse_args()
 
     if not args.skip_download:
@@ -452,17 +569,27 @@ def main():
         audio_path, sub_path = download_audio_and_subs(args.url)
     else:
         audio_path = TEST_DATA_DIR / "audio.wav"
-        # Find existing subtitle file
-        sub_path = None
-        for f in TEST_DATA_DIR.glob("subs*"):
-            if f.suffix in (".vtt", ".srt"):
-                sub_path = f
-                break
+        if args.subtitle:
+            sub_path = Path(args.subtitle)
+        else:
+            candidates = [
+                f for f in TEST_DATA_DIR.glob("subs*") if f.suffix in (".vtt", ".srt")
+            ]
+            sub_path = choose_subtitle_file(candidates)
         if not audio_path.exists() or sub_path is None:
             print("Error: No existing test data found. Run without --skip-download first.")
             sys.exit(1)
+        if not sub_path.exists():
+            print(f"Error: Subtitle file not found: {sub_path}")
+            sys.exit(1)
 
-    run_benchmark(audio_path, sub_path, model=args.model)
+    run_benchmark(
+        audio_path,
+        sub_path,
+        model=args.model,
+        merge_short_ms=max(0, args.merge_short_ms),
+        merge_gap_ms=max(0, args.merge_gap_ms),
+    )
 
 
 if __name__ == "__main__":

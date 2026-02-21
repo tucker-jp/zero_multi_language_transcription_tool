@@ -177,9 +177,11 @@ python test_accuracy.py "https://www.youtube.com/watch?v=XXXXX"  # specific vide
 python test_accuracy.py                                           # default French clip
 python test_accuracy.py --model large                             # test different model
 python test_accuracy.py --skip-download                           # reuse cached audio
+python test_accuracy.py --skip-download --subtitle test_data/subs.fr-orig.vtt
+python test_accuracy.py --skip-download --merge-short-ms 900 --merge-gap-ms 120
 ```
 
-The script downloads audio + French subtitles, transcribes the audio through MLXWhisperEngine, and reports Word Error Rate (WER) both overall and per-segment with a side-by-side comparison.
+The script downloads audio + French subtitles, transcribes the audio through MLXWhisperEngine, and reports Word Error Rate (WER) overall plus merged-window comparisons with side-by-side output. It also flags likely repetition-loop hallucinations.
 
 ## Troubleshooting
 
