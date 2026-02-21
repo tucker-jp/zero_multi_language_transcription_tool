@@ -99,7 +99,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `max_segment_seconds` | `15.0` | Maximum transcription segment length |
 | `segment_overlap_seconds` | `1.0` | Overlap between consecutive segments |
 | `word_timestamps` | `false` | Enable per-word timestamps (slower when `true`) |
-| `faster_whisper_compute_type` | `"int8_float16"` | Compute type when using `faster_whisper` |
+| `faster_whisper_compute_type` | `"int8"` | Compute type when using `faster_whisper` |
 | `translation_model` | `"Helsinki-NLP/opus-mt-fr-en"` | HuggingFace translation model |
 | `translation_cache_size` | `1000` | Number of cached translations (LRU) |
 | `transcription_queue_maxsize` | `8` | Max pending audio segments before dropping oldest |

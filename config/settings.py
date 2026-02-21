@@ -36,7 +36,7 @@ class Settings:
     max_segment_seconds: float = 15.0
     segment_overlap_seconds: float = 1.0
     word_timestamps: bool = False
-    faster_whisper_compute_type: str = "int8_float16"
+    faster_whisper_compute_type: str = "int8"
 
     # Translation
     translation_model: str = "Helsinki-NLP/opus-mt-fr-en"

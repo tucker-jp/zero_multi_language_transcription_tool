@@ -371,7 +371,7 @@ def run_benchmark(
     sub_path: Path,
     backend: str = "mlx",
     model: str = "small",
-    compute_type: str = "int8_float16",
+    compute_type: str = "int8",
     merge_short_ms: int = 900,
     merge_gap_ms: int = 120,
 ):
@@ -548,8 +548,8 @@ def main():
     )
     parser.add_argument(
         "--compute-type",
-        default="int8_float16",
-        help="faster-whisper compute type (default: int8_float16).",
+        default="int8",
+        help="faster-whisper compute type (default: int8).",
     )
     parser.add_argument(
         "--skip-download",

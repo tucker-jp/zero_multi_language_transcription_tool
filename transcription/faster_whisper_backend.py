@@ -16,7 +16,7 @@ class FasterWhisperEngine(TranscriptionEngine):
         model: str = "small",
         language: str = "fr",
         word_timestamps: bool = False,
-        compute_type: str = "int8_float16",
+        compute_type: str = "int8",
     ):
         self._model_name = model
         self._language = language
