@@ -30,11 +30,13 @@ class Settings:
     max_speech_seconds: float = 3.0  # force segment break during long speech
 
     # Transcription
+    transcription_backend: str = "mlx"  # mlx, faster_whisper
     whisper_model: str = "small"
     language: str = "fr"
     max_segment_seconds: float = 15.0
     segment_overlap_seconds: float = 1.0
     word_timestamps: bool = False
+    faster_whisper_compute_type: str = "int8_float16"
 
     # Translation
     translation_model: str = "Helsinki-NLP/opus-mt-fr-en"
@@ -76,6 +78,8 @@ class Settings:
             settings = cls(**filtered)
             if settings.performance_profile not in {"live", "balanced", "accurate"}:
                 settings.performance_profile = "live"
+            if settings.transcription_backend not in {"mlx", "faster_whisper"}:
+                settings.transcription_backend = "mlx"
             settings.transcription_queue_maxsize = max(
                 1, int(settings.transcription_queue_maxsize)
             )

@@ -30,4 +30,8 @@ def create_engine(backend: str = "mlx", **kwargs) -> TranscriptionEngine:
         from transcription.mlx_backend import MLXWhisperEngine
 
         return MLXWhisperEngine(**kwargs)
+    if backend == "faster_whisper":
+        from transcription.faster_whisper_backend import FasterWhisperEngine
+
+        return FasterWhisperEngine(**kwargs)
     raise ValueError(f"Unknown transcription backend: {backend}")

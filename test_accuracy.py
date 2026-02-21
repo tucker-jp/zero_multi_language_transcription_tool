@@ -369,7 +369,9 @@ def word_error_rate(reference: list[str], hypothesis: list[str]) -> tuple[float,
 def run_benchmark(
     audio_path: Path,
     sub_path: Path,
+    backend: str = "mlx",
     model: str = "small",
+    compute_type: str = "int8_float16",
     merge_short_ms: int = 900,
     merge_gap_ms: int = 120,
 ):
@@ -401,13 +403,11 @@ def run_benchmark(
     print(f"  Duration: {duration:.1f}s ({len(audio)} samples)")
 
     # Create and load engine
-    print(f"\nLoading MLXWhisperEngine (model={model})...")
-    engine = create_engine(
-        backend="mlx",
-        model=model,
-        language="fr",
-        word_timestamps=True,
-    )
+    print(f"\nLoading transcription engine (backend={backend}, model={model})...")
+    engine_kwargs = {"model": model, "language": "fr", "word_timestamps": True}
+    if backend == "faster_whisper":
+        engine_kwargs["compute_type"] = compute_type
+    engine = create_engine(backend=backend, **engine_kwargs)
     engine.load_model()
     print("  Model loaded.")
 
@@ -527,7 +527,7 @@ def run_benchmark(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark mlx-whisper transcription accuracy against YouTube subtitles"
+        description="Benchmark transcription accuracy against YouTube subtitles"
     )
     parser.add_argument(
         "url",
@@ -539,6 +539,17 @@ def main():
         "--model",
         default="small",
         help="Whisper model size: tiny, base, small, medium, large (default: small)",
+    )
+    parser.add_argument(
+        "--backend",
+        default="mlx",
+        choices=["mlx", "faster_whisper"],
+        help="Transcription backend to benchmark (default: mlx).",
+    )
+    parser.add_argument(
+        "--compute-type",
+        default="int8_float16",
+        help="faster-whisper compute type (default: int8_float16).",
     )
     parser.add_argument(
         "--skip-download",
@@ -586,7 +597,9 @@ def main():
     run_benchmark(
         audio_path,
         sub_path,
+        backend=args.backend,
         model=args.model,
+        compute_type=args.compute_type,
         merge_short_ms=max(0, args.merge_short_ms),
         merge_gap_ms=max(0, args.merge_gap_ms),
     )

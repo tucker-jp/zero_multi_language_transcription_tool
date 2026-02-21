@@ -1,6 +1,6 @@
 # French Transcription Helper
 
-A macOS desktop app that captures system audio, transcribes French speech in real time using mlx-whisper (Apple Silicon optimized), and displays live clickable captions in a floating overlay — even above fullscreen apps. Click any word or drag to select a phrase for instant French-to-English translation via OPUS-MT. Translations are auto-saved to vocabulary (with one-click Undo). Supports readable plain-text transcript export and Anki-compatible vocabulary export.
+A macOS desktop app that captures system audio, transcribes French speech in real time with pluggable Whisper backends (`mlx-whisper` by default, optional `faster-whisper`), and displays live clickable captions in a floating overlay — even above fullscreen apps. Click any word or drag to select a phrase for instant French-to-English translation via OPUS-MT. Translations are auto-saved to vocabulary (with one-click Undo). Supports readable plain-text transcript export and Anki-compatible vocabulary export.
 
 ## Prerequisites
 
@@ -19,6 +19,11 @@ pip install -r requirements.txt
 ```
 
 Models are downloaded automatically on first run (~1 GB for Whisper small, ~300 MB for OPUS-MT). They are **not** bundled with the .app — the first launch will download them.
+
+Optional backend for local A/B testing:
+```bash
+pip install faster-whisper
+```
 
 ## Building the .app Bundle
 
@@ -88,11 +93,13 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `vad_silence_ms` | `350` | Silence duration (ms) to trigger end-of-speech |
 | `vad_min_speech_ms` | `200` | Ignore speech segments shorter than this (ms) |
 | `max_speech_seconds` | `3.0` | Force a segment break during long continuous speech (seconds) |
+| `transcription_backend` | `"mlx"` | STT backend (`mlx` or `faster_whisper`) |
 | `whisper_model` | `"small"` | Whisper model size (`tiny`, `base`, `small`, `medium`, `large`) |
 | `language` | `"fr"` | Source language code |
 | `max_segment_seconds` | `15.0` | Maximum transcription segment length |
 | `segment_overlap_seconds` | `1.0` | Overlap between consecutive segments |
 | `word_timestamps` | `false` | Enable per-word timestamps (slower when `true`) |
+| `faster_whisper_compute_type` | `"int8_float16"` | Compute type when using `faster_whisper` |
 | `translation_model` | `"Helsinki-NLP/opus-mt-fr-en"` | HuggingFace translation model |
 | `translation_cache_size` | `1000` | Number of cached translations (LRU) |
 | `transcription_queue_maxsize` | `8` | Max pending audio segments before dropping oldest |
@@ -119,7 +126,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
                    speech segments
                          |
                TranscriptionWorker (QThread)
-                    mlx-whisper
+            mlx-whisper / faster-whisper
                          |
                   transcribed text
                     /         \
@@ -143,6 +150,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `audio/buffer.py` | Ring buffer for audio chunks |
 | `transcription/engine.py` | Transcription engine ABC |
 | `transcription/mlx_backend.py` | mlx-whisper backend (Apple Silicon) |
+| `transcription/faster_whisper_backend.py` | faster-whisper backend (CTranslate2) |
 | `transcription/result.py` | TranscriptionSegment dataclass |
 | `translation/opus_mt_backend.py` | OPUS-MT translation via HuggingFace transformers |
 | `translation/cache.py` | LRU translation cache |
@@ -163,7 +171,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 
 ## Transcription Accuracy Testing
 
-A standalone benchmark script compares mlx-whisper output against reference subtitles from YouTube videos.
+A standalone benchmark script compares transcription output against reference subtitles from YouTube videos.
 
 **Prerequisites:**
 ```bash
@@ -176,12 +184,13 @@ source .venv/bin/activate
 python test_accuracy.py "https://www.youtube.com/watch?v=XXXXX"  # specific video
 python test_accuracy.py                                           # default French clip
 python test_accuracy.py --model large                             # test different model
+python test_accuracy.py --backend faster_whisper --model small
 python test_accuracy.py --skip-download                           # reuse cached audio
 python test_accuracy.py --skip-download --subtitle test_data/subs.fr-orig.vtt
 python test_accuracy.py --skip-download --merge-short-ms 900 --merge-gap-ms 120
 ```
 
-The script downloads audio + French subtitles, transcribes the audio through MLXWhisperEngine, and reports Word Error Rate (WER) overall plus merged-window comparisons with side-by-side output. It also flags likely repetition-loop hallucinations.
+The script downloads audio + French subtitles, transcribes the audio through the configured test engine, and reports Word Error Rate (WER) overall plus merged-window comparisons with side-by-side output. It also flags likely repetition-loop hallucinations.
 
 ## Troubleshooting
 

@@ -67,16 +67,22 @@ class TranscriptionWorker(QThread):
         self.status.emit("Loading Whisper model...")
 
         try:
-            engine = create_engine(
-                backend="mlx",
-                model=self._settings.whisper_model,
-                language=self._settings.language,
-                word_timestamps=self._settings.word_timestamps,
-            )
+            backend = self._settings.transcription_backend
+            engine_kwargs = {
+                "model": self._settings.whisper_model,
+                "language": self._settings.language,
+                "word_timestamps": self._settings.word_timestamps,
+            }
+            if backend == "faster_whisper":
+                engine_kwargs["compute_type"] = self._settings.faster_whisper_compute_type
+
+            engine = create_engine(backend=backend, **engine_kwargs)
             engine.load_model()
             self.status.emit(
                 "Whisper model loaded "
-                f"(model={self._settings.whisper_model}, word_timestamps={self._settings.word_timestamps})."
+                f"(backend={backend}, "
+                f"model={self._settings.whisper_model}, "
+                f"word_timestamps={self._settings.word_timestamps})."
             )
         except Exception as e:
             self.error.emit(f"Failed to load Whisper: {e}")
