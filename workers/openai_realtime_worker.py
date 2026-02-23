@@ -106,28 +106,20 @@ class OpenAIRealtimeWorker(QThread):
 
     def _build_session_update_event(self) -> dict:
         session: dict = {
-            "type": "transcription",
-            "audio": {
-                "input": {
-                    "format": {
-                        "type": "audio/pcm",
-                        "rate": TARGET_SAMPLE_RATE,
-                    },
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": float(self._settings.openai_realtime_vad_threshold),
-                        "prefix_padding_ms": int(
-                            self._settings.openai_realtime_vad_prefix_padding_ms
-                        ),
-                        "silence_duration_ms": int(
-                            self._settings.openai_realtime_vad_silence_ms
-                        ),
-                    },
-                    "transcription": {
-                        "model": self._settings.openai_realtime_model,
-                        "language": self._settings.language,
-                    },
-                }
+            "input_audio_format": "pcm16",
+            "turn_detection": {
+                "type": "server_vad",
+                "threshold": float(self._settings.openai_realtime_vad_threshold),
+                "prefix_padding_ms": int(
+                    self._settings.openai_realtime_vad_prefix_padding_ms
+                ),
+                "silence_duration_ms": int(
+                    self._settings.openai_realtime_vad_silence_ms
+                ),
+            },
+            "input_audio_transcription": {
+                "model": self._settings.openai_realtime_model,
+                "language": self._settings.language,
             },
         }
 
@@ -135,16 +127,16 @@ class OpenAIRealtimeWorker(QThread):
         if isinstance(getattr(self._settings, "openai_realtime_prompt", ""), str):
             prompt = self._settings.openai_realtime_prompt.strip()
         if prompt:
-            session["audio"]["input"]["transcription"]["prompt"] = prompt
+            session["input_audio_transcription"]["prompt"] = prompt
 
         noise_reduction = str(self._settings.openai_realtime_noise_reduction or "").strip()
         if noise_reduction and noise_reduction.lower() != "none":
-            session["audio"]["input"]["noise_reduction"] = {"type": noise_reduction}
+            session["input_audio_noise_reduction"] = {"type": noise_reduction}
 
         if bool(self._settings.openai_realtime_include_logprobs):
             session["include"] = ["item.input_audio_transcription.logprobs"]
 
-        return {"type": "session.update", "session": session}
+        return {"type": "transcription_session.update", "session": session}
 
     def _parse_avg_logprob(self, event: dict) -> float | None:
         raw = event.get("logprobs")
@@ -218,13 +210,21 @@ class OpenAIRealtimeWorker(QThread):
         if event_type == "error":
             err = event.get("error")
             if isinstance(err, dict):
+                if err.get("code") == "input_audio_buffer_commit_empty":
+                    # Benign during shutdown when no trailing speech remains.
+                    return
                 message = err.get("message") or err.get("type") or str(err)
             else:
                 message = str(event)
             self.error.emit(f"OpenAI Realtime error: {message}")
             return
 
-        if event_type in {"session.created", "session.updated"}:
+        if event_type in {
+            "session.created",
+            "session.updated",
+            "transcription_session.created",
+            "transcription_session.updated",
+        }:
             model = self._settings.openai_realtime_model
             self.status.emit(f"OpenAI Realtime session ready (model={model}).")
             return
