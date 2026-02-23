@@ -33,6 +33,10 @@ class ControlBar(QWidget):
         self._export_btn.clicked.connect(self.export_requested.emit)
         layout.addWidget(self._export_btn)
 
+        self._save_dir_btn = QPushButton("Save Folder...")
+        self._save_dir_btn.clicked.connect(self.settings_requested.emit)
+        layout.addWidget(self._save_dir_btn)
+
         layout.addStretch()
 
     def _toggle_pause(self):

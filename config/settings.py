@@ -79,6 +79,7 @@ class Settings:
     db_path: str = field(
         default_factory=lambda: str(DEFAULT_DATA_DIR / "transcripts.db")
     )
+    default_save_dir: str = field(default_factory=lambda: str(Path.home() / "Documents"))
 
     def save(self, path: Path | None = None):
         path = Path(path or DEFAULT_CONFIG_PATH)
@@ -140,6 +141,9 @@ class Settings:
             )
             settings.openai_repair_max_extra_monthly_usd = max(
                 0.0, float(settings.openai_repair_max_extra_monthly_usd)
+            )
+            settings.default_save_dir = str(
+                settings.default_save_dir or str(Path.home() / "Documents")
             )
             return settings
         return cls()

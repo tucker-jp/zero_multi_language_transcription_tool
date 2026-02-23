@@ -127,6 +127,7 @@ class TranscriptionApp:
         # UI → Workers
         ov.pause_toggled.connect(self._on_pause_toggled)
         ov.export_requested.connect(self._on_export)
+        ov.save_folder_requested.connect(self._on_choose_save_folder)
         ov.text_selected.connect(tl.request_translation)
         ov.undo_save_requested.connect(self._on_undo_save)
 
@@ -174,6 +175,8 @@ class TranscriptionApp:
         export_action.triggered.connect(self._on_export)
         anki_action = menu.addAction("Export Anki Vocabulary...")
         anki_action.triggered.connect(self._on_export_anki)
+        save_dir_action = menu.addAction("Set Default Save Folder...")
+        save_dir_action.triggered.connect(self._on_choose_save_folder)
         menu.addSeparator()
         quit_action = menu.addAction("Quit")
         quit_action.triggered.connect(self._on_quit)
@@ -261,10 +264,12 @@ class TranscriptionApp:
         if not segments:
             return
         default_name = f"transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        export_dir = self._default_transcript_dir()
+        export_dir.mkdir(parents=True, exist_ok=True)
         path, _ = QFileDialog.getSaveFileName(
             self._overlay,
             "Export Transcript",
-            str(Path.home() / default_name),
+            str(export_dir / default_name),
             "Text Files (*.txt)",
         )
         if path:
@@ -291,16 +296,43 @@ class TranscriptionApp:
         if not vocab:
             self._on_status("No vocabulary to export")
             return
-        default_name = f"anki_french_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        default_name = f"anki_{self._settings.language}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        export_dir = self._default_anki_dir()
+        export_dir.mkdir(parents=True, exist_ok=True)
         path, _ = QFileDialog.getSaveFileName(
             self._overlay,
             "Export Anki Vocabulary",
-            str(Path.home() / default_name),
+            str(export_dir / default_name),
             "Text Files (*.txt)",
         )
         if path:
-            export_anki(vocab, path)
+            export_anki(vocab, path, tag=self._settings.language)
             self._on_status(f"Exported {len(vocab)} words to {path}")
+
+    def _save_root(self) -> Path:
+        configured = str(self._settings.default_save_dir or "").strip()
+        root = Path(configured).expanduser() if configured else Path.home()
+        return root
+
+    def _default_transcript_dir(self) -> Path:
+        return self._save_root() / "transcripts" / self._settings.language
+
+    def _default_anki_dir(self) -> Path:
+        return self._save_root() / "anki" / self._settings.language
+
+    def _on_choose_save_folder(self, _checked: bool = False):
+        current = self._save_root()
+        folder = QFileDialog.getExistingDirectory(
+            self._overlay,
+            "Select Default Save Folder",
+            str(current),
+        )
+        if not folder:
+            return
+        chosen = Path(folder).expanduser().resolve()
+        self._settings.default_save_dir = str(chosen)
+        self._settings.save()
+        self._on_status(f"Default save folder set to {chosen}")
 
     def _on_error(self, msg: str):
         print(f"[ERROR] {msg}")
@@ -319,8 +351,7 @@ class TranscriptionApp:
             # Auto-save plain-text transcript
             segments = self._get_current_session_segments()
             if segments:
-                data_dir = Path(self._settings.data_dir)
-                txt_dir = data_dir / "transcripts"
+                txt_dir = self._default_transcript_dir()
                 txt_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"session_{self._session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
                 export_txt(segments, txt_dir / filename, include_timestamps=True)

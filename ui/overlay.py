@@ -18,6 +18,7 @@ class OverlayWindow(QWidget):
 
     pause_toggled = pyqtSignal(bool)
     export_requested = pyqtSignal()
+    save_folder_requested = pyqtSignal()
     text_selected = pyqtSignal(str, str)  # (text, sentence)
     undo_save_requested = pyqtSignal()  # undo last auto-saved word
 
@@ -75,6 +76,7 @@ class OverlayWindow(QWidget):
         self.controls = ControlBar()
         self.controls.pause_toggled.connect(self.pause_toggled.emit)
         self.controls.export_requested.connect(self.export_requested.emit)
+        self.controls.settings_requested.connect(self.save_folder_requested.emit)
         layout.addWidget(self.controls)
 
         self.popup = TranslationPopup()

@@ -56,6 +56,12 @@ Or use the one-command launcher:
 ./run_app.sh
 ```
 
+Switch active learning language quickly:
+```bash
+./set_language.sh fr
+./set_language.sh es
+```
+
 A floating overlay appears at the bottom of your screen and a system tray icon (blue circle) is added.
 
 To use OpenAI Realtime, set `stt_provider` to `"openai_realtime"` in `~/.transcription_helper/settings.json`.
@@ -74,6 +80,7 @@ Recommended OpenAI live defaults for this project:
 - **Undo Save** button in the popup removes the last auto-saved word/phrase from vocabulary
 - **Pause/Resume** button on the overlay toggles audio capture
 - **Export Session TXT** button opens a save dialog for plain-text transcript export
+- **Save Folder...** button sets the default export folder used by transcript/Anki export dialogs and auto-saves
 - **Fullscreen support** — overlay stays visible above fullscreen apps and on all Spaces
 
 ### System tray menu
@@ -83,6 +90,7 @@ Recommended OpenAI live defaults for this project:
 - **Manage...** — opens the management window to browse sessions, manage vocabulary with select/delete, and export filtered vocabulary to Anki. Includes a language selector (French active; Spanish and German coming soon).
 - **Export Session TXT...** — manually export transcript text
 - **Export Anki Vocabulary...** — export all saved vocabulary as a tab-separated `.txt` file (front=French, back=English) ready for Anki import
+- **Set Default Save Folder...** — choose where transcripts and Anki exports are organized
 - **Quit** — stop all workers and exit
 
 ### Stopping
@@ -91,7 +99,7 @@ Quit via the tray menu or press **Ctrl+C** in the terminal. On exit the app auto
 
 1. Stops workers (audio, then transcription, then translation)
 2. Ends the database session
-3. Auto-exports a TXT transcript to `~/.transcription_helper/transcripts/`
+3. Auto-exports a TXT transcript to `<default_save_dir>/transcripts/<language>/`
 4. Closes the database
 
 ## Configuration
@@ -150,6 +158,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `overlay_y` | `-1` | Overlay Y position. `-1` = bottom of screen |
 | `data_dir` | `"~/.transcription_helper"` | Directory for database and exports |
 | `db_path` | `"~/.transcription_helper/transcripts.db"` | SQLite database path |
+| `default_save_dir` | `"~/Documents"` | Root folder for exports (organized into `transcripts/<lang>/` and `anki/<lang>/`) |
 
 ## Architecture
 
