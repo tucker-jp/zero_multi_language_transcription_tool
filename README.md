@@ -51,6 +51,11 @@ source .venv/bin/activate
 python main.py
 ```
 
+Or use the one-command launcher:
+```bash
+./run_app.sh
+```
+
 A floating overlay appears at the bottom of your screen and a system tray icon (blue circle) is added.
 
 To use OpenAI Realtime, set `stt_provider` to `"openai_realtime"` in `~/.transcription_helper/settings.json`.
