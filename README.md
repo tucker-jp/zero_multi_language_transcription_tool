@@ -55,6 +55,12 @@ A floating overlay appears at the bottom of your screen and a system tray icon (
 
 To use OpenAI Realtime, set `stt_provider` to `"openai_realtime"` in `~/.transcription_helper/settings.json`.
 
+Recommended OpenAI live defaults for this project:
+- Keep `openai_monthly_budget_usd` at `10.0`
+- Keep `openai_repair_enabled` on
+- Start with `openai_repair_avg_logprob_threshold` at `-0.9` (more negative = fewer repairs)
+- If latency feels high, lower repair frequency by setting threshold to `-1.0` or reducing `openai_repair_max_segments_per_hour`
+
 ### Using the overlay
 
 - **Live captions** appear as French audio is detected
@@ -117,6 +123,16 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `openai_realtime_vad_threshold` | `0.5` | Server VAD detection threshold |
 | `openai_realtime_vad_prefix_padding_ms` | `300` | Server VAD prefix padding in ms |
 | `openai_realtime_vad_silence_ms` | `500` | Server VAD silence duration in ms |
+| `openai_monthly_budget_usd` | `10.0` | Monthly OpenAI spend ceiling used by guardrails |
+| `openai_budget_hard_cap_enabled` | `true` | Stop cloud STT when budget cap is reached |
+| `openai_usage_path` | `"~/.transcription_helper/openai_usage.json"` | Monthly usage ledger file (realtime + repair) |
+| `openai_repair_enabled` | `true` | Enable low-confidence repair pass |
+| `openai_repair_model` | `"gpt-4o-transcribe"` | Model used only for selective repair |
+| `openai_repair_avg_logprob_threshold` | `-0.9` | Repair only when avg logprob is below this threshold |
+| `openai_repair_max_segment_seconds` | `8.0` | Skip repair for long segments to protect latency/cost |
+| `openai_repair_timeout_s` | `8.0` | Network timeout for repair calls |
+| `openai_repair_max_segments_per_hour` | `30` | Rate limit for repair calls |
+| `openai_repair_max_extra_monthly_usd` | `3.0` | Max monthly spend attributable to repair pass |
 | `translation_model` | `"Helsinki-NLP/opus-mt-fr-en"` | HuggingFace translation model |
 | `translation_cache_size` | `1000` | Number of cached translations (LRU) |
 | `transcription_queue_maxsize` | `8` | Max pending audio segments before dropping oldest |
@@ -160,6 +176,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 Alternative STT path:
   AudioWorker raw chunks -> OpenAIRealtimeWorker (gpt-4o-mini-transcribe)
                       -> partial/final captions -> Overlay + Database
+                      -> optional low-confidence repair (gpt-4o-transcribe)
 ```
 
 | Module | Purpose |

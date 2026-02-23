@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import queue
 import time
+import wave
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -18,6 +22,8 @@ from transcription.result import TranscriptionSegment
 
 TARGET_SAMPLE_RATE = 24000
 MINI_TRANSCRIBE_USD_PER_MIN = 0.003
+TRANSCRIBE_USD_PER_MIN = 0.006
+MAX_AUDIO_TIMELINE_SECONDS = 120.0
 
 
 @dataclass
@@ -38,6 +44,7 @@ class OpenAIRealtimeWorker(QThread):
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
         self._settings = settings
+
         # Realtime ingest needs a deeper queue than segment-based transcription.
         maxsize = max(128, int(settings.transcription_queue_maxsize) * 32)
         self._queue: queue.Queue[_ChunkItem | None] = queue.Queue(maxsize=maxsize)
@@ -55,35 +62,154 @@ class OpenAIRealtimeWorker(QThread):
         self._audio_seconds_sent = 0.0
         self._last_cost_status_mins = 0
 
-    def enqueue_audio_chunk(self, audio: np.ndarray, chunk_start_s: float, chunk_end_s: float):
-        item = _ChunkItem(
-            audio=audio,
-            chunk_start_s=float(chunk_start_s),
-            chunk_end_s=float(chunk_end_s),
-            enqueued_mono=time.monotonic(),
+        self._audio_timeline: list[tuple[float, float, np.ndarray]] = []
+
+        self._api_key = ""
+        self._repair_enabled = bool(self._settings.openai_repair_enabled)
+        self._repair_hour_marks: list[float] = []
+        self._budget_warned_70 = False
+        self._budget_warned_90 = False
+        self._budget_hard_blocked = False
+
+        self._usage_path = Path(self._settings.openai_usage_path)
+        self._usage_month = datetime.now().strftime("%Y-%m")
+        self._usage_realtime_seconds = 0.0
+        self._usage_repair_seconds = 0.0
+        self._load_usage()
+
+    # ------------------------------------------------------------------
+    # Usage / budget tracking
+    # ------------------------------------------------------------------
+
+    def _load_usage(self):
+        if not self._usage_path.exists():
+            return
+        try:
+            data = json.loads(self._usage_path.read_text())
+        except (json.JSONDecodeError, OSError, ValueError):
+            return
+
+        month = str(data.get("month", ""))
+        if month != self._usage_month:
+            return
+
+        self._usage_realtime_seconds = max(0.0, float(data.get("realtime_seconds", 0.0)))
+        self._usage_repair_seconds = max(0.0, float(data.get("repair_seconds", 0.0)))
+
+    def _save_usage(self):
+        payload = {
+            "month": self._usage_month,
+            "realtime_seconds": self._usage_realtime_seconds,
+            "repair_seconds": self._usage_repair_seconds,
+            "updated_at": datetime.now().isoformat(),
+        }
+        self._usage_path.parent.mkdir(parents=True, exist_ok=True)
+        self._usage_path.write_text(json.dumps(payload, indent=2))
+
+    def _projected_spend_usd(
+        self,
+        add_realtime_seconds: float = 0.0,
+        add_repair_seconds: float = 0.0,
+    ) -> tuple[float, float, float]:
+        realtime_seconds = self._usage_realtime_seconds + max(0.0, add_realtime_seconds)
+        repair_seconds = self._usage_repair_seconds + max(0.0, add_repair_seconds)
+        realtime_usd = (realtime_seconds / 60.0) * MINI_TRANSCRIBE_USD_PER_MIN
+        repair_usd = (repair_seconds / 60.0) * TRANSCRIBE_USD_PER_MIN
+        return realtime_usd, repair_usd, realtime_usd + repair_usd
+
+    def _current_spend_usd(self) -> tuple[float, float, float]:
+        return self._projected_spend_usd(0.0, 0.0)
+
+    def _emit_budget_progress(self):
+        budget = float(self._settings.openai_monthly_budget_usd)
+        if budget <= 0.0:
+            return
+        _r, _p, total = self._current_spend_usd()
+        ratio = total / budget
+
+        if ratio >= 0.90 and not self._budget_warned_90:
+            self._budget_warned_90 = True
+            self.status.emit(
+                f"OpenAI spend is at {ratio * 100:.0f}% of ${budget:.2f} monthly budget."
+            )
+        elif ratio >= 0.70 and not self._budget_warned_70:
+            self._budget_warned_70 = True
+            self.status.emit(
+                f"OpenAI spend is at {ratio * 100:.0f}% of ${budget:.2f} monthly budget."
+            )
+
+    def _apply_realtime_spend(self, seconds: float):
+        seconds = max(0.0, float(seconds))
+        if seconds <= 0.0:
+            return
+        self._usage_realtime_seconds += seconds
+        self._audio_seconds_sent += seconds
+        self._emit_budget_progress()
+
+    def _apply_repair_spend(self, seconds: float):
+        seconds = max(0.0, float(seconds))
+        if seconds <= 0.0:
+            return
+        self._usage_repair_seconds += seconds
+        self._emit_budget_progress()
+
+    def _allow_realtime_spend(self, add_seconds: float) -> bool:
+        budget = float(self._settings.openai_monthly_budget_usd)
+        if budget <= 0.0:
+            return True
+
+        _r, _p, projected = self._projected_spend_usd(add_realtime_seconds=add_seconds)
+        if projected <= budget:
+            return True
+
+        # First sacrifice repair to keep baseline realtime running as long as possible.
+        if self._repair_enabled:
+            self._repair_enabled = False
+            self.status.emit(
+                "Repair pass disabled to stay within monthly budget."
+            )
+
+        if not bool(self._settings.openai_budget_hard_cap_enabled):
+            return True
+
+        if not self._budget_hard_blocked:
+            self._budget_hard_blocked = True
+            self.error.emit(
+                "OpenAI monthly budget cap reached. Stopping cloud transcription "
+                "to prevent overspend."
+            )
+        self._running = False
+        return False
+
+    def _allow_repair_spend(self, add_seconds: float) -> bool:
+        if not self._repair_enabled:
+            return False
+
+        max_extra = float(self._settings.openai_repair_max_extra_monthly_usd)
+        _r, projected_repair, projected_total = self._projected_spend_usd(
+            add_repair_seconds=add_seconds
         )
 
-        try:
-            self._queue.put_nowait(item)
-            return
-        except queue.Full:
-            pass
-
-        try:
-            self._queue.get_nowait()
-        except queue.Empty:
-            pass
-
-        try:
-            self._queue.put_nowait(item)
-        except queue.Full:
-            return
-
-        self._dropped_count += 1
-        if self._dropped_count % 200 == 0:
+        if max_extra >= 0.0 and projected_repair > max_extra:
+            self._repair_enabled = False
             self.status.emit(
-                f"Realtime audio queue overloaded; dropped {self._dropped_count} chunks."
+                "Repair pass disabled after reaching configured repair budget cap."
             )
+            return False
+
+        budget = float(self._settings.openai_monthly_budget_usd)
+        if budget > 0.0 and projected_total > budget:
+            self._repair_enabled = False
+            self.status.emit(
+                "Repair pass skipped to avoid exceeding monthly budget."
+            )
+            return False
+
+        return True
+
+    # ------------------------------------------------------------------
+    # Audio helpers
+    # ------------------------------------------------------------------
 
     def _resample_to_target(self, audio: np.ndarray, source_rate: int) -> np.ndarray:
         if source_rate == TARGET_SAMPLE_RATE:
@@ -103,6 +229,78 @@ class OpenAIRealtimeWorker(QThread):
         audio = np.clip(audio, -1.0, 1.0)
         pcm16 = (audio * 32767.0).astype(np.int16)
         return base64.b64encode(pcm16.tobytes()).decode("ascii")
+
+    def _audio_to_wav_bytes(self, audio: np.ndarray, sample_rate: int) -> bytes:
+        pcm16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+        out = io.BytesIO()
+        with wave.open(out, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm16.tobytes())
+        return out.getvalue()
+
+    def _append_audio_timeline(self, chunk_start_s: float, chunk_end_s: float, audio: np.ndarray):
+        self._audio_timeline.append((chunk_start_s, chunk_end_s, audio.astype(np.float32, copy=True)))
+
+        cutoff = chunk_end_s - MAX_AUDIO_TIMELINE_SECONDS
+        if cutoff <= 0.0:
+            return
+
+        drop_until = 0
+        for i, (_s, e, _a) in enumerate(self._audio_timeline):
+            if e >= cutoff:
+                break
+            drop_until = i + 1
+
+        if drop_until > 0:
+            self._audio_timeline = self._audio_timeline[drop_until:]
+
+    def _extract_audio_window(
+        self,
+        start_s: float,
+        end_s: float,
+        pad_s: float = 0.18,
+    ) -> np.ndarray | None:
+        sample_rate = int(self._settings.sample_rate)
+        if sample_rate <= 0:
+            return None
+
+        window_start = max(0.0, start_s - pad_s)
+        window_end = max(window_start, end_s + pad_s)
+        duration = window_end - window_start
+        if duration <= 0.0:
+            return None
+
+        max_duration = float(self._settings.openai_repair_max_segment_seconds)
+        if duration > max_duration:
+            return None
+
+        pieces: list[np.ndarray] = []
+        for chunk_start, chunk_end, chunk_audio in self._audio_timeline:
+            overlap_start = max(window_start, chunk_start)
+            overlap_end = min(window_end, chunk_end)
+            if overlap_end <= overlap_start:
+                continue
+
+            start_i = int(round((overlap_start - chunk_start) * sample_rate))
+            end_i = int(round((overlap_end - chunk_start) * sample_rate))
+            start_i = max(0, min(len(chunk_audio), start_i))
+            end_i = max(start_i, min(len(chunk_audio), end_i))
+            if end_i > start_i:
+                pieces.append(chunk_audio[start_i:end_i])
+
+        if not pieces:
+            return None
+
+        audio = np.concatenate(pieces).astype(np.float32, copy=False)
+        if len(audio) == 0:
+            return None
+        return audio
+
+    # ------------------------------------------------------------------
+    # Realtime / repair API payloads
+    # ------------------------------------------------------------------
 
     def _build_session_update_event(self) -> dict:
         session: dict = {
@@ -155,6 +353,119 @@ class OpenAIRealtimeWorker(QThread):
             return None
         return sum(values) / len(values)
 
+    def _maybe_repair_text(
+        self,
+        text: str,
+        start_time: float,
+        end_time: float,
+        avg_logprob: float | None,
+    ) -> tuple[str, str]:
+        if not self._repair_enabled:
+            return text, "openai_realtime"
+
+        if avg_logprob is None:
+            return text, "openai_realtime"
+
+        threshold = float(self._settings.openai_repair_avg_logprob_threshold)
+        if avg_logprob >= threshold:
+            return text, "openai_realtime"
+
+        now_mono = time.monotonic()
+        cutoff = now_mono - 3600.0
+        self._repair_hour_marks = [t for t in self._repair_hour_marks if t >= cutoff]
+        hour_limit = int(self._settings.openai_repair_max_segments_per_hour)
+        if hour_limit > 0 and len(self._repair_hour_marks) >= hour_limit:
+            return text, "openai_realtime"
+
+        source_audio = self._extract_audio_window(start_time, end_time)
+        if source_audio is None:
+            return text, "openai_realtime"
+
+        segment_seconds = len(source_audio) / max(1, int(self._settings.sample_rate))
+        if segment_seconds <= 0.0:
+            return text, "openai_realtime"
+
+        if not self._allow_repair_spend(segment_seconds):
+            return text, "openai_realtime"
+
+        repaired = self._run_repair_transcription(source_audio)
+        self._apply_repair_spend(segment_seconds)
+        self._repair_hour_marks.append(now_mono)
+
+        if not repaired:
+            return text, "openai_realtime"
+
+        cleaned = repaired.strip()
+        if not cleaned:
+            return text, "openai_realtime"
+
+        if cleaned == text.strip():
+            return text, "openai_realtime"
+
+        self.status.emit(
+            f"Applied repair pass (avg_logprob={avg_logprob:.2f}) on low-confidence segment."
+        )
+        return cleaned, "openai_realtime_repair"
+
+    def _run_repair_transcription(self, audio: np.ndarray) -> str:
+        try:
+            import requests
+        except ImportError:
+            self.error.emit(
+                "Repair pass needs 'requests'. Install with: pip install requests"
+            )
+            self._repair_enabled = False
+            return ""
+
+        wav_bytes = self._audio_to_wav_bytes(audio, int(self._settings.sample_rate))
+        files = {
+            "file": ("segment.wav", wav_bytes, "audio/wav"),
+        }
+        data = {
+            "model": self._settings.openai_repair_model,
+            "language": self._settings.language,
+        }
+
+        prompt = str(self._settings.openai_realtime_prompt or "").strip()
+        if prompt:
+            data["prompt"] = prompt
+
+        timeout_s = float(self._settings.openai_repair_timeout_s)
+
+        try:
+            response = requests.post(
+                "https://api.openai.com/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                data=data,
+                files=files,
+                timeout=timeout_s,
+            )
+        except Exception as e:
+            self.error.emit(f"Repair pass request failed: {e}")
+            return ""
+
+        if response.status_code >= 400:
+            self.error.emit(
+                "Repair pass request failed "
+                f"({response.status_code}): {response.text[:240]}"
+            )
+            return ""
+
+        try:
+            payload = response.json()
+        except ValueError:
+            self.error.emit("Repair pass returned non-JSON response.")
+            return ""
+
+        text = payload.get("text", "")
+        if not isinstance(text, str):
+            return ""
+        return text
+
+    # ------------------------------------------------------------------
+    # Event handling / emission
+    # ------------------------------------------------------------------
+
     def _emit_final_ready(self):
         while self._next_emit_index < len(self._commit_order):
             item_id = self._commit_order[self._next_emit_index]
@@ -165,20 +476,29 @@ class OpenAIRealtimeWorker(QThread):
             text = payload.get("text", "").strip()
             if text:
                 start_time, end_time, end_to_caption_ms = self._derive_timing(item_id)
+                final_text, source = self._maybe_repair_text(
+                    text,
+                    start_time,
+                    end_time,
+                    payload.get("avg_logprob"),
+                )
                 self.transcription_ready.emit(
                     TranscriptionSegment(
-                        text=text,
+                        text=final_text,
                         start_time=start_time,
                         end_time=end_time,
                         words=[],
                         language=self._settings.language,
                         end_to_caption_ms=end_to_caption_ms,
                         is_final=True,
-                        source="openai_realtime",
+                        source=source,
                         avg_logprob=payload.get("avg_logprob"),
                     )
                 )
 
+            self._completed.pop(item_id, None)
+            self._speech_bounds_ms.pop(item_id, None)
+            self._partial_text.pop(item_id, None)
             self._next_emit_index += 1
 
     def _derive_timing(self, item_id: str) -> tuple[float, float, float | None]:
@@ -288,11 +608,47 @@ class OpenAIRealtimeWorker(QThread):
             self._emit_final_ready()
             return
 
+    # ------------------------------------------------------------------
+    # Public worker API
+    # ------------------------------------------------------------------
+
+    def enqueue_audio_chunk(self, audio: np.ndarray, chunk_start_s: float, chunk_end_s: float):
+        item = _ChunkItem(
+            audio=audio,
+            chunk_start_s=float(chunk_start_s),
+            chunk_end_s=float(chunk_end_s),
+            enqueued_mono=time.monotonic(),
+        )
+
+        try:
+            self._queue.put_nowait(item)
+            return
+        except queue.Full:
+            pass
+
+        try:
+            self._queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        try:
+            self._queue.put_nowait(item)
+        except queue.Full:
+            return
+
+        self._dropped_count += 1
+        if self._dropped_count % 200 == 0:
+            self.status.emit(
+                f"Realtime audio queue overloaded; dropped {self._dropped_count} chunks."
+            )
+
     def run(self):
         self._running = True
 
-        api_key = (self._settings.openai_api_key or "").strip() or os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key:
+        self._api_key = (self._settings.openai_api_key or "").strip() or os.getenv(
+            "OPENAI_API_KEY", ""
+        ).strip()
+        if not self._api_key:
             self.error.emit(
                 "OpenAI API key missing. Set OPENAI_API_KEY env var or openai_api_key in settings."
             )
@@ -312,7 +668,7 @@ class OpenAIRealtimeWorker(QThread):
             ws = websocket.create_connection(
                 self._settings.openai_realtime_url,
                 header=[
-                    f"Authorization: Bearer {api_key}",
+                    f"Authorization: Bearer {self._api_key}",
                     "OpenAI-Beta: realtime=v1",
                 ],
                 timeout=5,
@@ -336,8 +692,14 @@ class OpenAIRealtimeWorker(QThread):
                         self._audio_origin_mono = item.enqueued_mono - item.chunk_end_s
                         self._server_audio_offset_s = max(0.0, item.chunk_start_s)
 
+                    self._append_audio_timeline(item.chunk_start_s, item.chunk_end_s, item.audio)
+
                     audio_24k = self._resample_to_target(item.audio, self._settings.sample_rate)
-                    self._audio_seconds_sent += len(audio_24k) / TARGET_SAMPLE_RATE
+                    chunk_seconds = len(audio_24k) / TARGET_SAMPLE_RATE
+                    if not self._allow_realtime_spend(chunk_seconds):
+                        break
+
+                    self._apply_realtime_spend(chunk_seconds)
                     payload = self._audio_to_base64_pcm16(audio_24k)
                     ws.send(
                         json.dumps(
@@ -353,11 +715,12 @@ class OpenAIRealtimeWorker(QThread):
                 sent_minutes = int(self._audio_seconds_sent // 60)
                 if sent_minutes >= self._last_cost_status_mins + 3:
                     self._last_cost_status_mins = sent_minutes
-                    estimated_cost = (self._audio_seconds_sent / 60.0) * MINI_TRANSCRIBE_USD_PER_MIN
+                    realtime_usd, repair_usd, total_usd = self._current_spend_usd()
                     self.status.emit(
-                        f"OpenAI streamed {self._audio_seconds_sent/60.0:.1f} min "
-                        f"(~${estimated_cost:.2f} at $0.003/min)."
+                        f"OpenAI usage this month: {self._audio_seconds_sent/60.0:.1f} live min, "
+                        f"${total_usd:.2f} total (${realtime_usd:.2f} live + ${repair_usd:.2f} repair)."
                     )
+                    self._save_usage()
 
                 while self._running:
                     try:
@@ -405,6 +768,7 @@ class OpenAIRealtimeWorker(QThread):
         except Exception as e:
             self.error.emit(f"OpenAI Realtime worker failed: {e}")
         finally:
+            self._save_usage()
             if ws is not None:
                 try:
                     ws.close()

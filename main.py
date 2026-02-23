@@ -186,6 +186,8 @@ class TranscriptionApp:
         self._overlay.set_caption(segment.text, is_final=segment.is_final)
         if not segment.is_final:
             return
+        if segment.source == "openai_realtime_repair":
+            self._on_status("Applied high-accuracy repair pass on latest segment.")
         if self._session_id is not None:
             self._pending_db_segments.append(segment)
             if len(self._pending_db_segments) >= 10:

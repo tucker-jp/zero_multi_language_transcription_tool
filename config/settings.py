@@ -47,6 +47,18 @@ class Settings:
     openai_realtime_vad_threshold: float = 0.5
     openai_realtime_vad_prefix_padding_ms: int = 300
     openai_realtime_vad_silence_ms: int = 500
+    openai_monthly_budget_usd: float = 10.0
+    openai_budget_hard_cap_enabled: bool = True
+    openai_usage_path: str = field(
+        default_factory=lambda: str(DEFAULT_DATA_DIR / "openai_usage.json")
+    )
+    openai_repair_enabled: bool = True
+    openai_repair_model: str = "gpt-4o-transcribe"
+    openai_repair_avg_logprob_threshold: float = -0.9
+    openai_repair_max_segment_seconds: float = 8.0
+    openai_repair_timeout_s: float = 8.0
+    openai_repair_max_segments_per_hour: int = 30
+    openai_repair_max_extra_monthly_usd: float = 3.0
 
     # Translation
     translation_model: str = "Helsinki-NLP/opus-mt-fr-en"
@@ -110,6 +122,24 @@ class Settings:
             )
             settings.openai_realtime_vad_silence_ms = max(
                 100, int(settings.openai_realtime_vad_silence_ms)
+            )
+            settings.openai_monthly_budget_usd = max(
+                0.5, float(settings.openai_monthly_budget_usd)
+            )
+            settings.openai_repair_avg_logprob_threshold = float(
+                settings.openai_repair_avg_logprob_threshold
+            )
+            settings.openai_repair_max_segment_seconds = min(
+                30.0, max(1.0, float(settings.openai_repair_max_segment_seconds))
+            )
+            settings.openai_repair_timeout_s = min(
+                60.0, max(2.0, float(settings.openai_repair_timeout_s))
+            )
+            settings.openai_repair_max_segments_per_hour = max(
+                0, int(settings.openai_repair_max_segments_per_hour)
+            )
+            settings.openai_repair_max_extra_monthly_usd = max(
+                0.0, float(settings.openai_repair_max_extra_monthly_usd)
             )
             return settings
         return cls()
