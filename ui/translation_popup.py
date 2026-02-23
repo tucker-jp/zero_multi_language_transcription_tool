@@ -5,6 +5,7 @@ from __future__ import annotations
 from PyQt6.QtWidgets import (
     QFrame,
     QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QGraphicsDropShadowEffect,
@@ -58,9 +59,23 @@ class TranslationPopup(QFrame):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(6)
 
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(6)
+
         self._type_label = QLabel()
         self._type_label.setObjectName("typeLabel")
-        layout.addWidget(self._type_label)
+        header.addWidget(self._type_label)
+        header.addStretch()
+
+        self._close_btn = QPushButton("X")
+        self._close_btn.setObjectName("closeBtn")
+        self._close_btn.setFixedSize(24, 24)
+        self._close_btn.setToolTip("Close")
+        self._close_btn.clicked.connect(self.hide)
+        header.addWidget(self._close_btn)
+
+        layout.addLayout(header)
 
         self._word_label = QLabel()
         self._word_label.setObjectName("wordLabel")

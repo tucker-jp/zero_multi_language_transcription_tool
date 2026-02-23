@@ -110,4 +110,21 @@ QPushButton#undoBtn:disabled {
     border-color: rgba(255, 255, 255, 40);
     color: rgba(255, 255, 255, 0.3);
 }
+QPushButton#closeBtn {
+    background-color: rgba(255, 255, 255, 20);
+    border: 1px solid rgba(255, 255, 255, 60);
+    border-radius: 12px;
+    color: rgba(255, 255, 255, 0.85);
+    font-family: "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 0px;
+}
+QPushButton#closeBtn:hover {
+    background-color: rgba(255, 255, 255, 40);
+    color: rgba(255, 255, 255, 1.0);
+}
+QPushButton#closeBtn:pressed {
+    background-color: rgba(255, 255, 255, 65);
+}
 """
