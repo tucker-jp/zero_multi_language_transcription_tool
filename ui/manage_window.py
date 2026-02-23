@@ -377,14 +377,13 @@ class ManageWindow(QWidget):
         self._lang_combo = QComboBox()
         self._lang_combo.setStyleSheet(MANAGE_COMBO_STYLE)
         self._lang_combo.addItem("French")
-        self._lang_combo.addItem("Spanish (Coming Soon)")
+        self._lang_combo.addItem("Spanish")
         self._lang_combo.addItem("German (Coming Soon)")
 
-        # Disable Spanish and German
-        model = self._lang_combo.model()
-        for i in (1, 2):
-            item = model.item(i)
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+        current_lang = str(self._settings.language or "fr").lower()
+        self._lang_combo.setCurrentIndex(1 if current_lang == "es" else 0)
+        self._lang_combo.setEnabled(False)
+        self._lang_combo.setToolTip("Use ./set_language.sh fr|es and restart the app.")
 
         header.addWidget(self._lang_combo)
 
