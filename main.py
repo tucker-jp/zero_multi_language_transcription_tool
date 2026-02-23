@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import signal
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -186,18 +187,22 @@ class TranscriptionApp:
         self._tray.show()
 
     def _on_transcription(self, segment: TranscriptionSegment):
-        self._overlay.set_caption(segment.text, is_final=segment.is_final)
-        if not segment.is_final:
-            return
-        if segment.source == "openai_realtime_repair":
-            self._on_status("Applied high-accuracy repair pass on latest segment.")
-        if self._session_id is not None:
-            self._pending_db_segments.append(segment)
-            if len(self._pending_db_segments) >= 10:
-                self._flush_segment_batch()
+        try:
+            if self._overlay is not None:
+                self._overlay.set_caption(segment.text, is_final=segment.is_final)
+            if not segment.is_final:
+                return
+            if segment.source == "openai_realtime_repair":
+                self._on_status("Applied high-accuracy repair pass on latest segment.")
+            if self._session_id is not None:
+                self._pending_db_segments.append(segment)
+                if len(self._pending_db_segments) >= 10:
+                    self._flush_segment_batch()
 
-        if segment.end_to_caption_ms is not None:
-            self._record_latency(segment.end_to_caption_ms)
+            if segment.end_to_caption_ms is not None:
+                self._record_latency(segment.end_to_caption_ms)
+        except Exception as e:
+            self._on_error(f"Transcription callback failed: {e}")
 
     def _record_latency(self, latency_ms: float):
         self._latency_samples_ms.append(latency_ms)
@@ -279,12 +284,16 @@ class TranscriptionApp:
     def _on_translation_ready(
         self, word: str, word_trans: str, sentence: str, sentence_trans: str
     ):
-        # Auto-save to vocabulary
-        self._last_vocab_id = self._db.save_word(
-            word, word_trans, sentence, self._settings.language, self._session_id
-        )
-        # Then show popup
-        self._overlay.show_translation(word, word_trans, sentence, sentence_trans)
+        try:
+            # Auto-save to vocabulary
+            self._last_vocab_id = self._db.save_word(
+                word, word_trans, sentence, self._settings.language, self._session_id
+            )
+            # Then show popup
+            if self._overlay is not None:
+                self._overlay.show_translation(word, word_trans, sentence, sentence_trans)
+        except Exception as e:
+            self._on_error(f"Translation callback failed: {e}")
 
     def _on_undo_save(self):
         if self._last_vocab_id is not None:
@@ -377,6 +386,9 @@ class TranscriptionApp:
 def main():
     # Allow Ctrl+C to work
     signal.signal(signal.SIGINT, signal.SIG_DFL)
+    sys.excepthook = lambda exc_type, exc_value, exc_tb: traceback.print_exception(
+        exc_type, exc_value, exc_tb
+    )
 
     app = QApplication(sys.argv)
     app.setApplicationName("French Transcription Helper")

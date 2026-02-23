@@ -51,9 +51,10 @@ class TranslationWorker(QThread):
 
     def run(self):
         self._running = True
-        self.status.emit("Loading translation model...")
+        translator = None
 
         try:
+            self.status.emit("Loading translation model...")
             translator = OpusMTTranslator(
                 model_name=self._settings.translation_model,
                 cache_size=self._settings.translation_cache_size,
@@ -64,23 +65,31 @@ class TranslationWorker(QThread):
             self.error.emit(f"Failed to load translation model: {e}")
             return
 
-        while self._running:
-            try:
-                item = self._queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
+        try:
+            while self._running:
+                try:
+                    item = self._queue.get(timeout=0.2)
+                except queue.Empty:
+                    continue
 
-            if item is None:
-                break
+                if item is None:
+                    break
 
-            text, sentence = item
-            try:
-                context = self._prepare_sentence_context(text, sentence)
-                text_trans = translator.translate(text)
-                sentence_trans = translator.translate(context) if context else ""
-                self.translation_ready.emit(text, text_trans, context, sentence_trans)
-            except Exception as e:
-                self.error.emit(f"Translation error: {e}")
+                try:
+                    text, sentence = item
+                except Exception:
+                    self.error.emit("Translation worker received malformed queue item.")
+                    continue
+
+                try:
+                    context = self._prepare_sentence_context(text, sentence)
+                    text_trans = translator.translate(text)
+                    sentence_trans = translator.translate(context) if context else ""
+                    self.translation_ready.emit(text, text_trans, context, sentence_trans)
+                except Exception as e:
+                    self.error.emit(f"Translation error: {e}")
+        except Exception as e:
+            self.error.emit(f"Translation worker crashed: {e}")
 
     def stop(self):
         self._running = False
