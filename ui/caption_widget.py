@@ -70,9 +70,9 @@ class CaptionWidget(QTextBrowser):
             html_parts.append(
                 f'<span style="cursor: pointer;">{html.escape(w)}</span>'
             )
-        html = " ".join(html_parts)
+        html_text = " ".join(html_parts)
         self.setHtml(
-            f'<div style="text-align: center; line-height: 1.5;">{html}</div>'
+            f'<div style="text-align: center; line-height: 1.5;">{html_text}</div>'
         )
         self._build_word_spans()
         # Auto-scroll to bottom to show latest captions
