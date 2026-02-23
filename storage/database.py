@@ -53,6 +53,7 @@ class Database:
                 word TEXT NOT NULL,
                 translation TEXT NOT NULL,
                 sentence TEXT,
+                language TEXT DEFAULT 'fr',
                 session_id INTEGER,
                 added_at TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
@@ -64,6 +65,15 @@ class Database:
                 ON vocabulary(word);
             """
         )
+        # Lightweight migration for older DBs created before vocabulary.language existed.
+        cols = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(vocabulary)").fetchall()
+        }
+        if "language" not in cols:
+            self._conn.execute(
+                "ALTER TABLE vocabulary ADD COLUMN language TEXT DEFAULT 'fr'"
+            )
         self._conn.commit()
 
     def start_session(self, title: str = "") -> int:
@@ -112,13 +122,14 @@ class Database:
         word: str,
         translation: str,
         sentence: str,
+        language: str = "fr",
         session_id: int | None = None,
     ) -> int:
         self._check_connected()
         cursor = self._conn.execute(
-            "INSERT INTO vocabulary (word, translation, sentence, session_id, added_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (word, translation, sentence, session_id, datetime.now().isoformat()),
+            "INSERT INTO vocabulary (word, translation, sentence, language, session_id, added_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (word, translation, sentence, language, session_id, datetime.now().isoformat()),
         )
         self._conn.commit()
         return cursor.lastrowid
@@ -128,19 +139,27 @@ class Database:
         self._conn.execute("DELETE FROM vocabulary WHERE id = ?", (word_id,))
         self._conn.commit()
 
-    def get_vocabulary(self, session_id: int | None = None) -> list[dict]:
+    def get_vocabulary(
+        self,
+        session_id: int | None = None,
+        language: str | None = None,
+    ) -> list[dict]:
         self._check_connected()
+        where: list[str] = []
+        params: list = []
         if session_id is not None:
-            rows = self._conn.execute(
-                "SELECT id, word, translation, sentence, added_at FROM vocabulary "
-                "WHERE session_id = ? ORDER BY added_at",
-                (session_id,),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT id, word, translation, sentence, added_at FROM vocabulary "
-                "ORDER BY added_at"
-            ).fetchall()
+            where.append("session_id = ?")
+            params.append(session_id)
+        if language:
+            where.append("language = ?")
+            params.append(language)
+        where_sql = f" WHERE {' AND '.join(where)}" if where else ""
+
+        rows = self._conn.execute(
+            "SELECT id, word, translation, sentence, language, added_at FROM vocabulary "
+            f"{where_sql} ORDER BY added_at",
+            tuple(params),
+        ).fetchall()
         return [dict(r) for r in rows]
 
     def get_segments(self, session_id: int) -> list[dict]:

@@ -12,6 +12,7 @@ setup(
             "workers", "ui", "storage",
             "PyQt6", "numpy", "torch", "mlx_whisper", "mlx",
             "transformers", "sentencepiece", "sounddevice", "silero_vad",
+            "websocket", "requests", "urllib3",
         ],
         "includes": ["PyQt6.QtWidgets", "PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.sip"],
         "plist": {

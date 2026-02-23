@@ -87,9 +87,9 @@ Recommended OpenAI live defaults for this project:
 
 - **Pause/Resume Listening** — toggle audio capture (syncs with overlay button)
 - **Show/Hide Overlay** — toggle overlay visibility
-- **Manage...** — opens the management window to browse sessions, manage vocabulary with select/delete, and export filtered vocabulary to Anki. Includes a language selector (French active; Spanish and German coming soon).
+- **Manage...** — opens the management window to browse sessions, manage vocabulary with select/delete, and export filtered vocabulary to Anki for the active language.
 - **Export Session TXT...** — manually export transcript text
-- **Export Anki Vocabulary...** — export all saved vocabulary as a tab-separated `.txt` file (front=French, back=English) ready for Anki import
+- **Export Anki Vocabulary...** — export saved vocabulary for the active language as a tab-separated `.txt` file ready for Anki import
 - **Set Default Save Folder...** — choose where transcripts and Anki exports are organized
 - **Quit** — stop all workers and exit
 
@@ -148,6 +148,9 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `openai_repair_max_extra_monthly_usd` | `3.0` | Max monthly spend attributable to repair pass |
 | `translation_model` | `"Helsinki-NLP/opus-mt-fr-en"` | HuggingFace translation model |
 | `translation_cache_size` | `1000` | Number of cached translations (LRU) |
+| `translation_include_sentence_context` | `true` | Include sentence/context translation in popup (slower when enabled) |
+| `translation_include_sentence_for_single_word` | `false` | Include context translation on single-word clicks |
+| `translation_sentence_max_chars` | `180` | Max context length sent to translator per click |
 | `transcription_queue_maxsize` | `8` | Max pending audio segments before dropping oldest |
 | `translation_queue_maxsize` | `32` | Max pending translation requests before dropping oldest |
 | `overlay_opacity` | `0.85` | Overlay window opacity (0-1) |
@@ -262,3 +265,8 @@ Install BlackHole 2ch and configure a Multi-Output Device in Audio MIDI Setup. S
 **Slow transcription**
 - Use a smaller Whisper model
 - Close other heavy applications to free Apple Silicon GPU/Neural Engine resources
+
+**Word/Phrase translation feels slow**
+- Set `translation_include_sentence_for_single_word` to `false` (default)
+- Reduce `translation_sentence_max_chars` (e.g. `120`)
+- Disable `translation_include_sentence_context` for fastest click-to-translation

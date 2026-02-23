@@ -281,7 +281,7 @@ class TranscriptionApp:
     ):
         # Auto-save to vocabulary
         self._last_vocab_id = self._db.save_word(
-            word, word_trans, sentence, self._session_id
+            word, word_trans, sentence, self._settings.language, self._session_id
         )
         # Then show popup
         self._overlay.show_translation(word, word_trans, sentence, sentence_trans)
@@ -292,9 +292,9 @@ class TranscriptionApp:
             self._last_vocab_id = None
 
     def _on_export_anki(self):
-        vocab = self._db.get_vocabulary()
+        vocab = self._db.get_vocabulary(language=self._settings.language)
         if not vocab:
-            self._on_status("No vocabulary to export")
+            self._on_status(f"No {self._settings.language.upper()} vocabulary to export")
             return
         default_name = f"anki_{self._settings.language}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         export_dir = self._default_anki_dir()

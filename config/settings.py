@@ -63,6 +63,9 @@ class Settings:
     # Translation
     translation_model: str = "Helsinki-NLP/opus-mt-fr-en"
     translation_cache_size: int = 1000
+    translation_include_sentence_context: bool = True
+    translation_include_sentence_for_single_word: bool = False
+    translation_sentence_max_chars: int = 180
     transcription_queue_maxsize: int = 8
     translation_queue_maxsize: int = 32
 
@@ -141,6 +144,9 @@ class Settings:
             )
             settings.openai_repair_max_extra_monthly_usd = max(
                 0.0, float(settings.openai_repair_max_extra_monthly_usd)
+            )
+            settings.translation_sentence_max_chars = min(
+                600, max(40, int(settings.translation_sentence_max_chars))
             )
             settings.default_save_dir = str(
                 settings.default_save_dir or str(Path.home() / "Documents")

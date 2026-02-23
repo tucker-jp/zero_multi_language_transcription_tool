@@ -717,7 +717,7 @@ class OpenAIRealtimeWorker(QThread):
                     self._last_cost_status_mins = sent_minutes
                     realtime_usd, repair_usd, total_usd = self._current_spend_usd()
                     self.status.emit(
-                        f"OpenAI usage this month: {self._audio_seconds_sent/60.0:.1f} live min, "
+                        f"OpenAI usage this month: {self._usage_realtime_seconds/60.0:.1f} live min, "
                         f"${total_usd:.2f} total (${realtime_usd:.2f} live + ${repair_usd:.2f} repair)."
                     )
                     self._save_usage()

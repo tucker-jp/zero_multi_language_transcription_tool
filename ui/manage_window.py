@@ -135,9 +135,10 @@ class SessionsTab(QWidget):
 class VocabularyTab(QWidget):
     """Tab for managing saved vocabulary with checkboxes and export."""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, language: str):
         super().__init__()
         self._db = db
+        self._language = language
         self._setup_ui()
 
     def _setup_ui(self):
@@ -208,7 +209,7 @@ class VocabularyTab(QWidget):
     def refresh(self):
         self._table.blockSignals(True)
         self._table.setRowCount(0)
-        vocab = self._db.get_vocabulary()
+        vocab = self._db.get_vocabulary(language=self._language)
 
         self._table.setRowCount(len(vocab))
         for row, entry in enumerate(vocab):
@@ -325,7 +326,7 @@ class VocabularyTab(QWidget):
             return
 
         default_name = (
-            f"anki_french_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            f"anki_{self._language}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         )
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -334,7 +335,7 @@ class VocabularyTab(QWidget):
             "Text Files (*.txt)",
         )
         if path:
-            export_anki(filtered, path)
+            export_anki(filtered, path, tag=self._language)
 
 
 class ManageWindow(QWidget):
@@ -394,7 +395,7 @@ class ManageWindow(QWidget):
         self._tabs.setStyleSheet(MANAGE_TAB_STYLE)
 
         self._sessions_tab = SessionsTab(self._db)
-        self._vocabulary_tab = VocabularyTab(self._db)
+        self._vocabulary_tab = VocabularyTab(self._db, self._settings.language)
 
         self._tabs.addTab(self._sessions_tab, "Sessions")
         self._tabs.addTab(self._vocabulary_tab, "Vocabulary")

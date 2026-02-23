@@ -75,8 +75,10 @@ class TranslationWorker(QThread):
 
             text, sentence = item
             try:
-                text_trans, sentence_trans = translator.translate_text(text, sentence)
-                self.translation_ready.emit(text, text_trans, sentence, sentence_trans)
+                context = self._prepare_sentence_context(text, sentence)
+                text_trans = translator.translate(text)
+                sentence_trans = translator.translate(context) if context else ""
+                self.translation_ready.emit(text, text_trans, context, sentence_trans)
             except Exception as e:
                 self.error.emit(f"Translation error: {e}")
 
@@ -93,3 +95,53 @@ class TranslationWorker(QThread):
                 self._queue.put_nowait(None)
             except queue.Full:
                 pass
+
+    def _prepare_sentence_context(self, text: str, sentence: str) -> str:
+        """Trim context aggressively to reduce click-to-translation latency."""
+        if not bool(self._settings.translation_include_sentence_context):
+            return ""
+
+        sentence = " ".join((sentence or "").split())
+        if not sentence:
+            return ""
+
+        is_single_word = " " not in text.strip()
+        if is_single_word and not bool(
+            self._settings.translation_include_sentence_for_single_word
+        ):
+            return ""
+
+        max_chars = int(self._settings.translation_sentence_max_chars)
+        if len(sentence) <= max_chars:
+            return sentence
+
+        # Keep the selected text near the center of the context window when possible.
+        needle = text.strip().lower()
+        haystack = sentence.lower()
+        idx = haystack.find(needle) if needle else -1
+
+        if idx < 0:
+            return sentence[:max_chars].rstrip() + "..."
+
+        center = idx + max(1, len(needle) // 2)
+        half = max_chars // 2
+        start = max(0, center - half)
+        end = min(len(sentence), start + max_chars)
+        start = max(0, end - max_chars)
+
+        # Nudge to word boundaries.
+        if start > 0:
+            next_space = sentence.find(" ", start)
+            if next_space != -1 and next_space + 1 < len(sentence):
+                start = next_space + 1
+        if end < len(sentence):
+            prev_space = sentence.rfind(" ", start, end)
+            if prev_space > start:
+                end = prev_space
+
+        clipped = sentence[start:end].strip()
+        if start > 0:
+            clipped = "..." + clipped
+        if end < len(sentence):
+            clipped = clipped + "..."
+        return clipped
