@@ -68,7 +68,7 @@ To use OpenAI Realtime, set `stt_provider` to `"openai_realtime"` in `~/.transcr
 
 Recommended OpenAI live defaults for this project:
 - Keep `openai_monthly_budget_usd` at `10.0`
-- Keep `openai_repair_enabled` on
+- Keep `openai_repair_enabled` off for lowest latency; turn it on only when you want extra accuracy
 - Start with `openai_repair_avg_logprob_threshold` at `-0.9` (more negative = fewer repairs)
 - If latency feels high, lower repair frequency by setting threshold to `-1.0` or reducing `openai_repair_max_segments_per_hour`
 
@@ -114,7 +114,7 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `audio_device` | `null` | Audio input device name or index. `null` = auto-detect BlackHole |
 | `sample_rate` | `16000` | Audio sample rate in Hz |
 | `channels` | `1` | Number of audio channels |
-| `chunk_duration_ms` | `30` | Duration of each VAD chunk in ms |
+| `chunk_duration_ms` | `20` | Duration of each VAD chunk in ms |
 | `vad_threshold` | `0.5` | Voice activity detection confidence threshold (0-1) |
 | `vad_silence_ms` | `350` | Silence duration (ms) to trigger end-of-speech |
 | `vad_min_speech_ms` | `200` | Ignore speech segments shorter than this (ms) |
@@ -134,12 +134,12 @@ Settings are stored at `~/.transcription_helper/settings.json`. Edit this file t
 | `openai_realtime_noise_reduction` | `"near_field"` | Noise reduction profile (`near_field`, `far_field`, `none`) |
 | `openai_realtime_include_logprobs` | `true` | Request token logprobs in completed events |
 | `openai_realtime_vad_threshold` | `0.5` | Server VAD detection threshold |
-| `openai_realtime_vad_prefix_padding_ms` | `300` | Server VAD prefix padding in ms |
-| `openai_realtime_vad_silence_ms` | `500` | Server VAD silence duration in ms |
+| `openai_realtime_vad_prefix_padding_ms` | `180` | Server VAD prefix padding in ms |
+| `openai_realtime_vad_silence_ms` | `260` | Server VAD silence duration in ms |
 | `openai_monthly_budget_usd` | `10.0` | Monthly OpenAI spend ceiling used by guardrails |
 | `openai_budget_hard_cap_enabled` | `true` | Stop cloud STT when budget cap is reached |
 | `openai_usage_path` | `"~/.transcription_helper/openai_usage.json"` | Monthly usage ledger file (realtime + repair) |
-| `openai_repair_enabled` | `true` | Enable low-confidence repair pass |
+| `openai_repair_enabled` | `false` | Enable low-confidence repair pass (accuracy boost, can add latency) |
 | `openai_repair_model` | `"gpt-4o-transcribe"` | Model used only for selective repair |
 | `openai_repair_avg_logprob_threshold` | `-0.9` | Repair only when avg logprob is below this threshold |
 | `openai_repair_max_segment_seconds` | `8.0` | Skip repair for long segments to protect latency/cost |

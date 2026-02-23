@@ -21,7 +21,7 @@ class Settings:
     audio_device: str | int | None = None  # name or index; None = BlackHole auto-detect
     sample_rate: int = 16000
     channels: int = 1
-    chunk_duration_ms: int = 30  # ms per VAD chunk
+    chunk_duration_ms: int = 20  # ms per VAD chunk
 
     # VAD
     vad_threshold: float = 0.5
@@ -45,14 +45,14 @@ class Settings:
     openai_realtime_noise_reduction: str = "near_field"
     openai_realtime_include_logprobs: bool = True
     openai_realtime_vad_threshold: float = 0.5
-    openai_realtime_vad_prefix_padding_ms: int = 300
-    openai_realtime_vad_silence_ms: int = 500
+    openai_realtime_vad_prefix_padding_ms: int = 180
+    openai_realtime_vad_silence_ms: int = 260
     openai_monthly_budget_usd: float = 10.0
     openai_budget_hard_cap_enabled: bool = True
     openai_usage_path: str = field(
         default_factory=lambda: str(DEFAULT_DATA_DIR / "openai_usage.json")
     )
-    openai_repair_enabled: bool = True
+    openai_repair_enabled: bool = False
     openai_repair_model: str = "gpt-4o-transcribe"
     openai_repair_avg_logprob_threshold: float = -0.9
     openai_repair_max_segment_seconds: float = 8.0

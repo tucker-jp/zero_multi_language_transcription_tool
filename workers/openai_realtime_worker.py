@@ -363,6 +363,10 @@ class OpenAIRealtimeWorker(QThread):
         if not self._repair_enabled:
             return text, "openai_realtime"
 
+        # Never block live transcription when there is pending audio backlog.
+        if self._queue.qsize() > 0:
+            return text, "openai_realtime"
+
         if avg_logprob is None:
             return text, "openai_realtime"
 
